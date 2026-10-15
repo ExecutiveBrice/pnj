@@ -285,3 +285,32 @@ def test_lore_is_strictly_per_npc(multi_campaign, multi_app):
     multi_app.handle_line("/say what do you know about smithing?")
     drain(multi_app)
     assert "quenched in brine" not in multi_app.llm.calls[-1][0]
+
+
+def test_switching_npcs_uses_each_regional_language_and_voice(multi_campaign):
+    (multi_campaign / "config.toml").write_text(
+        'language = "fr"\n[character_languages]\n'
+        'character = "fr-CH"\nkorval = "fr-CA"\nmira = "en"\n', encoding="utf-8")
+    factory = FakeSpeakerFactory()
+    app = NPCApp(load_config(multi_campaign), llm=FakeLLM(),
+                 speaker=FakeSpeaker(), make_speaker=factory)
+    app.start()
+    try:
+        for stem, regional, reply in (
+            ("character", "Swiss", "Cela coûte septante pièces."),
+            ("korval", "Quebec", "Bienvenue chez nous, mon ami."),
+            ("mira", "Always answer in English", "You are welcome, traveler."),
+        ):
+            switch(app, stem)
+            app.llm.reply = reply
+            app.handle_line("/say Bonjour")
+            drain(app)
+            assert regional in app.llm.calls[-1][0]
+            assert app.speaker.spoken[-1] == reply
+        assert len(app.llm.calls) == 3
+        assert factory.calls[-1].name == "en_GB-alba-medium.onnx"
+        switch(app, "korval")
+        assert app.speaker.spoken == ["Cela coûte septante pièces.",
+                                      "Bienvenue chez nous, mon ami."]
+    finally:
+        app.shutdown(summarize=False)

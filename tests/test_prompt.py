@@ -168,3 +168,16 @@ def test_lore_block_sits_between_sheet_and_secrets():
     # absent when there is none
     assert "Reference knowledge" not in build_system_prompt("X", "", "", [],
                                                             lore=[])
+
+
+@pytest.mark.parametrize("language, regional", [
+    ("fr", "France"), ("fr-CH", "Swiss"), ("fr-CA", "Quebec"), ("fr-BE", "Belgian"),
+])
+def test_french_variants_replace_english_rule(language, regional):
+    prompt = build_system_prompt("CHARSHEET", "", "", [], language=language)
+    assert "Always answer in French" in prompt
+    assert "Always answer in English" not in prompt
+    assert regional in prompt
+    assert "stereotypes" in prompt
+    assert not looks_foreign("Oui, je vous écoute. Que désirez-vous ?", language)
+    assert looks_foreign("You are welcome, my friend.", language)

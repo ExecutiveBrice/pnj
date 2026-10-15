@@ -816,3 +816,40 @@ def test_no_budget_warning_for_openai_backend(config, campaign):
     drain(app)
     app._queue.put(None)
     assert not [e for e in of_type(app, Info) if "context window" in e.message]
+
+
+@pytest.mark.parametrize("language", ["fr", "fr-CH", "fr-CA", "fr-BE"])
+def test_french_reply_reaches_audio_without_english_retry(app, language):
+    app.config.character_languages[app.active.stem] = language
+    app.llm.reply = "Oui, je vous écoute. Que désirez-vous ?"
+    app.handle_line("/say Bonjour !")
+    drain(app)
+    assert len(app.llm.calls) == 1
+    assert "Always answer in French" in app.llm.calls[0][0]
+    assert app.speaker.spoken == ["Oui, je vous écoute. Que désirez-vous?"]
+
+
+def test_french_streaming_keeps_regional_speech(config):
+    config.character_languages["character"] = "fr-CH"
+    llm = StreamingFakeLLM(chunks=("Oui, je vous écoute. ", "Cela coûte septante pièces."))
+    speaker = StreamingFakeSpeaker()
+    app = NPCApp(config, llm=llm, speaker=speaker)
+    app.start()
+    try:
+        app.handle_line("/say Bonjour !")
+        drain(app)
+        assert llm.stream_calls == 1
+        assert not llm.calls
+        assert " ".join(speaker.spoken) == "Oui, je vous écoute. Cela coûte septante pièces."
+    finally:
+        app.shutdown(summarize=False)
+
+
+def test_french_campaign_reasks_english_reply_in_french(app):
+    app.config.language = "fr-BE"
+    app.llm.replies = ["You are welcome, my friend.", "Bienvenue, mon ami."]
+    app.handle_line("/say Bonjour !")
+    drain(app)
+    assert len(app.llm.calls) == 2
+    assert "entirely in French" in app.llm.calls[-1][1][-1]["content"]
+    assert app.speaker.spoken == ["Bienvenue, mon ami."]

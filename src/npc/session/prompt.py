@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from ..languages import language_instruction
 from .lore import LoreFile, lore_block
 from .secrets import SecretsSheet, locked_block, revealed_block
 
@@ -51,8 +52,14 @@ def build_system_prompt(
     secrets: SecretsSheet | None = None,
     denied: set[str] = frozenset(),
     lore: list[LoreFile] | None = None,
+    language: str = "en",
 ) -> str:
-    parts = [ROLE_FRAMING]
+    framing = ROLE_FRAMING
+    if language != "en":
+        start = framing.index("- Always answer in English")
+        end = framing.index('- Messages marked', start)
+        framing = framing[:start] + "- " + language_instruction(language) + "\n" + framing[end:]
+    parts = [framing]
     parts.append("# Your character sheet\n\n" + character.strip())
     if lore:
         # right after the sheet: sheet + lore change only on /reload, so the
@@ -132,12 +139,12 @@ _FOREIGN_FUNCTION_WORDS = frozenset((
 ).split())
 
 
-def looks_foreign(text: str) -> bool:
-    """True when a reply is probably not English — the TTS voice is always
-    British English, so a Swedish/French reply sounds mangled. Signals: words
-    containing non-ASCII letters (å, é, ü, …) and distinct foreign function
-    words; two combined hits mark the reply foreign. Conservative on purpose:
-    an English line quoting one foreign word passes and is merely mispronounced.
+def looks_foreign(text: str, language: str = "en") -> bool:
+    """Conservatively flag text inconsistent with the configured voice language.
+
+    English uses diacritics and foreign function words as signals; French
+    accepts its own words and accents and looks for foreign function words.
+    This heuristic cannot reliably classify short replies or regional variants.
     """
     # any letter beyond the Latin blocks (Greek, Cyrillic, CJK, kana, …) is
     # decisive on its own — Alba can't say it, and feeding CJK to the
@@ -145,6 +152,11 @@ def looks_foreign(text: str) -> bool:
     if any(ch.isalpha() and ord(ch) >= 0x0370 for ch in text):
         return True
     words = re.findall(r"[^\W\d_]+", text.lower())
+    if language.startswith("fr"):
+        # Heuristic only: French accents and function words are expected here.
+        unexpected = set("the you your are is my with this that not and och jag "
+                         "är inte ich und nicht usted pero".split())
+        return len(unexpected.intersection(words)) >= 2
     non_ascii = sum(1 for w in words if not w.isascii())
     function_hits = len(_FOREIGN_FUNCTION_WORDS.intersection(words))
     return non_ascii + function_hits >= 2

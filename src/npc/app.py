@@ -16,6 +16,7 @@ from datetime import date
 
 from .audio.recorder import AudioClip
 from .config import Config
+from .languages import LANGUAGES
 from .events import (
     Busy,
     ConfigReloaded,
@@ -69,8 +70,8 @@ from .session.sentences import iter_sentences
 from .stt import looks_like_hallucination
 
 
-class _NotEnglish(Exception):
-    """Streaming control flow: the reply opened in another language — abandon
+class _WrongLanguage(Exception):
+    """Streaming control flow: the reply opened in an unexpected language — abandon
     the stream before any audio plays and let the non-streaming path re-ask."""
 
 HELP = """\
@@ -121,6 +122,7 @@ class NPCApp:
         self._state = State.IDLE
         self._lock = threading.Lock()
         self._worker: threading.Thread | None = None
+        self._accepting = True
         self._player_turns = 0  # campaign-global; drives checkpoint cadence
         self._silence_hinted = False
         self._ctx_warned = False
@@ -223,6 +225,7 @@ class NPCApp:
                 ("[tts]", new.tts != self.config.tts),
                 ("[hotkey]", new.hotkey != self.config.hotkey),
                 ("[overlay]", new.overlay != self.config.overlay),
+                ("[mobile]", new.mobile != self.config.mobile),
             ) if changed
         )
         for slot in self.roster.values():
@@ -236,7 +239,9 @@ class NPCApp:
         self._worker.start()
 
     def shutdown(self, summarize: bool) -> None:
-        self._queue.put(None)
+        with self._lock:
+            self._accepting = False
+            self._queue.put(None)
         if self._worker is not None:
             self._worker.join(timeout=120)
             if self._worker.is_alive():
@@ -326,6 +331,63 @@ class NPCApp:
             return
         self._queue.put(("utterance", clip))
 
+    # ---------- player interfaces (CLI / mobile / future audio transport) ----------
+
+    def submit_player_text(self, text: str) -> bool:
+        """Queue in-character dialogue, never interpret it as a GM command."""
+        if not isinstance(text, str) or not text.strip():
+            return False
+        with self._lock:
+            if not self._accepting:
+                return False
+            self._queue.put(("say", text.strip()))
+        return True
+
+    def submit_audio_clip(self, clip: AudioClip) -> bool:
+        """Queue an owned mono int16 clip through the existing STT pipeline.
+
+        No microphone is required. Busy/recording engines reject the clip;
+        the caller may retry after idle. Whisper handles sample-rate conversion.
+        """
+        import numpy as np
+
+        if (not isinstance(clip, AudioClip)
+                or not isinstance(clip.samples, np.ndarray)
+                or clip.samples.ndim != 1 or clip.samples.dtype != np.dtype("int16")
+                or isinstance(clip.sample_rate, bool)
+                or not isinstance(clip.sample_rate, int) or clip.sample_rate <= 0):
+            return False
+        if self.transcriber is None:
+            self._emit(VoiceUnavailable())
+            return False
+        owned = AudioClip(clip.samples.copy(), clip.sample_rate)
+        if owned.duration < self.config.min_clip_seconds:
+            self._emit(RecordingDiscarded("too short"))
+            return False
+        with self._lock:
+            if not self._accepting or self._state is not State.IDLE:
+                return False
+            self._queue.put(("utterance", owned))
+        return True
+
+    def switch_npc(self, name: str) -> bool:
+        """Resolve and queue a switch using the same rules as /npc."""
+        if not isinstance(name, str) or not name.strip():
+            return False
+        return self._cmd_npc(name.strip())
+
+    def stop_speaking(self) -> None:
+        """Interrupt playback immediately; the worker settles the turn's state."""
+        with self._lock:
+            speaker = self.speaker if self._state is State.SPEAKING else None
+        if speaker is not None:
+            speaker.stop()
+
+    def player_status(self) -> dict:
+        """Explicit player-safe snapshot: no model config, GM notes or memory."""
+        with self._lock:
+            return {"npc": self.npc_name, "state": self._state.value}
+
     # ---------- typed input (main thread) ----------
 
     def handle_line(self, line: str) -> str:
@@ -348,7 +410,7 @@ class NPCApp:
                 if not arg:
                     self._emit(Info("[usage: /say <what the player says>]"))
                 else:
-                    self._queue.put(("say", arg))
+                    self.submit_player_text(arg)
             case "/npc":
                 self._cmd_npc(arg)
             case "/yes" | "/no":
@@ -409,6 +471,7 @@ class NPCApp:
                 if kind == "utterance":
                     self._handle_utterance(payload)
                 elif kind == "say":
+                    self._emit(PlayerSpoke(payload))
                     self._respond_to_player(payload)
                 elif kind == "ooc":
                     self._add_ooc(payload)
@@ -433,6 +496,7 @@ class NPCApp:
                 self._queue.task_done()
 
     def _handle_utterance(self, clip: AudioClip) -> None:
+        self._set_state_if({State.IDLE}, State.PROCESSING)
         if clip.dbfs() < self.config.stt.silence_threshold_db:
             self._emit(RecordingDiscarded("silence"))
             if not self._silence_hinted:  # once per session, not every miss
@@ -463,6 +527,7 @@ class NPCApp:
             secrets=slot.secrets,
             denied=slot.denied_secrets,
             lore=slot.lore,
+            language=self.config.language_for(slot.stem),
         )
 
     def _respond_to_player(self, text: str, stt_seconds: float | None = None) -> None:
@@ -522,36 +587,40 @@ class NPCApp:
     def _reply_turn(self, slot: CharacterSlot, system: str,
                     messages: list[dict[str, str]], timings: dict[str, float],
                     player_line: str) -> bool:
-        """LLM → English lock → secret markers → history → TTS, shared by
+        """LLM → language check → secret markers → history → TTS, shared by
         player turns and secret-delivery turns. Returns True when the reply
         opened a new secret-reveal request."""
+        language = self.config.language_for(slot.stem)
+        language_name = LANGUAGES[language][1]
+        stall = ("Hm. Laissez-moi un instant pour y réfléchir."
+                 if language.startswith("fr") else FALLBACK_STALL)
         result = (self._stream_reply(system, messages, timings)
                   if self._can_stream() else None)
-        if result is None:  # streaming off/rejected, or the reply wasn't English
+        if result is None:  # streaming off/rejected, or the reply used the wrong language
             timings.clear()
             t = time.perf_counter()
             raw = self.llm.chat(system, messages)
             marker_ids = find_markers(raw)
             reply = extract_dialogue(strip_markers(raw), self.npc_name)
-            if looks_foreign(reply):  # English-only lock: Alba can't speak this
-                self._emit(Info("[reply was not in English — asking again]"))
+            if looks_foreign(reply, language):  # voice must match the reply language
+                self._emit(Info(f"[reply was not in {language_name} — asking again]"))
                 raw = self.llm.chat(system, messages + [
                     {"role": "assistant", "content": reply},
                     {"role": "user", "content":
-                     "GM NOTE (out-of-character): You broke the English-only "
-                     "rule. Give that reply again, entirely in English."},
+                     f"GM NOTE (out-of-character): You broke the {language_name}-only "
+                     f"rule. Give that reply again, entirely in {language_name}."},
                 ])
                 marker_ids += find_markers(raw)
                 reply = extract_dialogue(strip_markers(raw), self.npc_name)
             timings["llm"] = time.perf_counter() - t
             requested = self._handle_markers(slot, marker_ids, player_line)
             if not reply and requested:  # marker-only reply: never dead air
-                reply = FALLBACK_STALL
+                reply = stall
             if reply:
                 self._record_npc_reply(slot, reply)
             if reply and self.speaker is not None:
-                if looks_foreign(reply):  # retry failed too — never voice this
-                    self._emit(Info("[reply still not in English — shown, not spoken]"))
+                if looks_foreign(reply, language):  # retry failed too — never voice this
+                    self._emit(Info(f"[reply still not in {language_name} — shown, not spoken]"))
                 elif self._set_state_if({State.PROCESSING}, State.SPEAKING):
                     t = time.perf_counter()
                     self.speaker.say(reply)
@@ -560,7 +629,7 @@ class NPCApp:
             reply, cancelled, marker_ids = result
             requested = self._handle_markers(slot, marker_ids, player_line)
             if not reply and requested and not cancelled:
-                reply = FALLBACK_STALL  # marker-only reply: never dead air
+                reply = stall  # marker-only reply: never dead air
                 self.speaker.say(reply)
             if reply:  # "" = barged in before any audio
                 self._record_npc_reply(slot, reply)
@@ -607,9 +676,9 @@ class NPCApp:
                 cleaned = strip_decoration(sentence, self.npc_name)
                 if not cleaned:  # a pure stage direction is never spoken
                     continue
-                if looks_foreign(cleaned):
+                if looks_foreign(cleaned, self.config.language_for(self.active.stem)):
                     if not spoken_any:
-                        raise _NotEnglish  # whole reply likely foreign — bail pre-audio
+                        raise _WrongLanguage  # whole reply likely foreign — bail pre-audio
                     continue  # mid-reply language flip: skip speaking this sentence
                 spoken_any = True
                 yield cleaned
@@ -618,7 +687,7 @@ class NPCApp:
         t_speak = time.perf_counter()
         try:
             spoken, cancelled = self.speaker.say_stream(cleaned_sentences())
-        except (StreamingNotSupported, _NotEnglish):
+        except (StreamingNotSupported, _WrongLanguage):
             self._set_state_if({State.SPEAKING}, State.PROCESSING)
             return None
         timings["speak"] = time.perf_counter() - t_speak
@@ -789,25 +858,26 @@ class NPCApp:
 
     # ---------- NPC switching ----------
 
-    def _cmd_npc(self, arg: str) -> None:
+    def _cmd_npc(self, arg: str) -> bool:
         """Main thread: resolve the name and enqueue the switch (it must
         serialize with in-flight turns); bare /npc lists the roster."""
         from .roster import resolve_npc
 
         if not arg:
             self._emit(Info(self._roster_listing()))
-            return
+            return False
         found = resolve_npc(self.roster, arg)
         if isinstance(found, list):
             problem = "ambiguous" if found else "unknown"
             self._emit(Info(f"[{problem} NPC {arg!r}]\n" + self._roster_listing()))
-            return
-        if found is self.active:
-            self._emit(Info(f"[already speaking with {found.name}]"))
-            return
+            return False
         if self.state is not State.IDLE:
             self._emit(Info(f"[switching to {found.name} after the current line]"))
-        self._queue.put(("npc", found.stem))
+        with self._lock:
+            if not self._accepting:
+                return False
+            self._queue.put(("npc", found.stem))
+        return True
 
     def _roster_listing(self) -> str:
         lines = ["NPCs in this campaign:"]
@@ -822,8 +892,13 @@ class NPCApp:
         """Worker thread: swap the active slot. Speaker is assigned BEFORE
         the slot so the hotkey thread's barge-in reference never lags."""
         slot = self.roster[stem]
-        self.speaker = self._speaker_for(slot)
-        self.active = slot
+        if slot is self.active:
+            self._emit(Info(f"[already speaking with {slot.name}]"))
+            return
+        speaker = self._speaker_for(slot)
+        with self._lock:
+            self.speaker = speaker
+            self.active = slot
         self._emit(NpcSwitched(slot.name, slot.voice))
         if slot.pending_secret:  # a decision is still owed for this NPC
             self._emit(SecretPending(slot.name, slot.pending_secret))

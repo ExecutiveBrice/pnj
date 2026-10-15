@@ -18,8 +18,8 @@ with no cloud in sight.**
 `npc` is a terminal program for game masters running tabletop RPGs like
 [Numenera](https://numenera.com). You describe an NPC in a markdown file, start
 a session, and hand your players a voice: hold the push-to-talk key, speak as a
-player (in English **or Swedish**), and the NPC answers in spoken British
-English, staying true to its personality, knowledge, and secrets. Between
+player in their language, and the NPC answers in the configured language
+(English or French, including Swiss, Canadian/Quebec and Belgian variants), staying true to its personality, knowledge, and secrets. Between
 sessions the NPC keeps a logbook, so it remembers what your party did last time.
 
 Everything runs **locally on your own machine**. After the one-time model
@@ -79,7 +79,15 @@ then click **Envoyer l’enregistrement**. Allow microphone access for Python
 in your OS settings. This button works independently of `[hotkey]` settings.
 **Terminer et mémoriser** waits for pending turns and writes the final summary.
 **Forcer l’arrêt** can interrupt startup, downloads, or shutdown; it cannot
-guarantee a final summary. Replies still use the project's English-only rules.
+guarantee a final summary.
+
+Use **Langue des personnages** before starting: choose the campaign default or
+an individual character, then select English or French (France, Switzerland,
+Canada/Quebec, Belgium). Choices are saved in the campaign's `config.toml`.
+**Suivre la campagne** removes an individual override. Click **Préparer les modèles**
+after a change to download missing voices. French defaults to `fr_FR-siwis-medium`;
+explicit `[tts] voice` and `[tts.voices]` settings take precedence. Regional
+choices guide vocabulary and expressions; pronunciation depends on the voice model.
 
 If Tkinter is missing, install a Python distribution with Tcl/Tk and recreate
 the virtual environment using that interpreter. On Linux, install the
@@ -339,7 +347,7 @@ Prefer tapping to holding? Set `mode = "tap"` under `[hotkey]` in
 default, tunable via `[stt] vad_silence_seconds`) sends the recording; a
 second tap sends it immediately.
 
-Two optional flags on `npc run`:
+Optional flags on `npc run`:
 
 - `--timings` prints per-stage latency after each reply
   (`[turn 4.9s: stt 0.8s | llm 2.1s (first token 0.31s) | speak 3.2s]`);
@@ -349,6 +357,10 @@ Two optional flags on `npc run`:
   or open it in a browser on the same machine (e.g. a second monitor facing
   the players). It shows the NPC's name, a state light, the last player line,
   and the reply streaming in as it's spoken.
+- `--mobile` (or `[mobile] enabled = true`) adds a bidirectional player API at
+  `ws://127.0.0.1:8766/ws`: send player dialogue, switch NPCs, receive replies
+  and Piper PCM audio. The CLI and overlay continue to work alongside it.
+  See [the mobile protocol](docs/mobile.md) for configuration and a JavaScript example.
 
 ### Overlay on a tablet (LAN)
 
@@ -427,10 +439,23 @@ If the server wants an API key, set `api_key` under `[llm]` — or better,
 
 ## Languages
 
-Players can speak **Swedish or English** — whisper auto-detects the language
-per utterance. The NPC always *answers* in English with the Alba voice; this is
-enforced in its instructions, so a Swedish question gets an English answer.
-Pin `stt.language = "sv"` in `config.toml` if auto-detection ever guesses wrong.
+Whisper auto-detects the player's language per utterance, including French.
+Pin `stt.language = "fr"` (or `"sv"` / `"en"`) if detection guesses wrong.
+The NPC answers in the campaign's `language` (English by default) or its
+`[character_languages]` override. These settings also work with the CLI:
+
+```toml
+# Above all [sections]:
+language = "fr"
+
+[character_languages]
+character = "fr-CH"  # character.md: Swiss French
+korval = "fr-CA"     # characters/korval.md: Canadian/Quebec French
+vess = "fr-BE"       # characters/vess.md: Belgian French
+```
+
+Regional variants guide phrasing without caricature; they do not change a Piper
+voice's trained accent. Explicit custom voices should match the character's language.
 
 ## Using a hardware button
 
@@ -465,7 +490,7 @@ uv run npc transcribe campaigns/mygame clip.wav   # debug: STT only
 ```
 
 The full design — pipeline, threads, the event bus, and the five guarantees
-(offline, per-NPC isolation, unleakable secrets, English lock, crash-safe
+(offline, per-NPC isolation, unleakable secrets, language rules, crash-safe
 writes) — is written up in [ARCHITECTURE.md](ARCHITECTURE.md). Every stage
 sits behind a Protocol, so the whole loop is tested with fakes: no GPU,
 microphone, or LLM server needed for the test suite. See

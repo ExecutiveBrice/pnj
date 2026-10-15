@@ -20,6 +20,10 @@ flowchart LR
     STT -. events .-> BUS
     BUS[(event bus)] --> CLI[terminal UI]
     BUS --> WS[overlay websocket\nOBS / table display]
+    BUS --> MOBILE[mobile websocket\nplayer API]
+    MOBILE --> WORKER[NPCApp worker queue]
+    WORKER --> PROMPT
+    TTS -. played PCM .-> MOBILE
 ```
 
 Everything runs on one machine. Nothing ever calls the internet.
@@ -75,7 +79,8 @@ sessions.
 ## Five guarantees
 
 1. **Fully offline.** Whisper, the LLM, and Piper are all local; the only
-   network listener is the overlay, loopback-bound unless you opt in.
+   network listeners are the optional overlay and mobile API, loopback-bound
+   unless you opt in.
 2. **Per-NPC isolation.** What players tell one NPC never reaches another —
    not in the prompt, not in the logbook, not in the summaries.
 3. **Secrets can't leak.** Gated clues never enter the prompt until the GM
@@ -94,6 +99,28 @@ Every hardware/model dependency sits behind a small Protocol —
 suite (280+ tests) runs against fakes: no GPU, no microphone, no server.
 `tests/test_app_pipeline.py` is the best starting point for how the pieces
 meet; `npc doctor` is the runtime mirror of the same seams.
+
+## Mobile player interface
+
+`mobile_server.py` owns a separate asyncio thread and `/ws` endpoint on port
+8766. It is disabled by default (`[mobile] enabled` / `npc run --mobile`).
+It calls only public `NPCApp` player methods: `submit_player_text`, `switch_npc`,
+`stop_speaking`, and `player_status`. Text and switching enter the existing
+worker queue; the server owns no conversation state. `submit_audio_clip`
+prepares the same seam for future phone uploads without duplicating STT.
+
+`mobile_protocol.py` defines version 1 and explicitly serializes player payloads.
+Both `dm_only=False` and `table_safe=True` are mandatory, even on loopback;
+an allowlist further excludes unknown events and all arbitrary exception text.
+The overlay's existing wire format and exposure policy are unchanged.
+
+`PiperSpeaker.on_audio` observes each sanitized segment when playback begins,
+on both the plain and streaming paths. It never synthesizes twice, and an
+observer failure cannot interrupt local playback. The CLI wires this callback
+for the default speaker and every per-NPC voice, sharing the existing player.
+Mobile publication queues whole PCM segments without awaiting network I/O;
+bounded engine/client queues and send deadlines disconnect lagging clients.
+See [docs/mobile.md](docs/mobile.md) for framing, limitations and extension points.
 
 ## Reading order
 

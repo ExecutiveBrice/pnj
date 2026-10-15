@@ -251,6 +251,12 @@ def cmd_run(args) -> int:
         failed_soft |= {"Audio input", "Audio output"}
 
     llm = make_llm_client(config.llm)
+    mobile = None
+    mobile_enabled = config.mobile.enabled or getattr(args, "mobile", False)
+
+    def on_audio(samples, sample_rate):
+        if mobile is not None:
+            mobile.publish_audio(samples, sample_rate)
 
     transcriber = recorder = None
     if not ({"Whisper model", "Audio input", "Push-to-talk"} & failed_soft):
@@ -277,10 +283,12 @@ def cmd_run(args) -> int:
         # ONE AudioPlayer for every voice: its persistent output stream is
         # what keeps the ALSA PipeWire plugin's close bug out of sessions
         player = AudioPlayer()
-        speaker = PiperSpeaker(config.tts.voice_path, player=player)
+        speaker = PiperSpeaker(config.tts.voice_path, player=player,
+                               on_audio=on_audio if mobile_enabled else None)
 
         def make_speaker(voice_path, _player=player):
-            return PiperSpeaker(voice_path, player=_player)
+            return PiperSpeaker(voice_path, player=_player,
+                                on_audio=on_audio if mobile_enabled else None)
     else:
         print("! spoken replies disabled this session (see FAILs above)")
 
@@ -291,6 +299,8 @@ def cmd_run(args) -> int:
         print_event(event)
         if args.timings and isinstance(event, TurnCompleted):
             print(format_timings(event))
+        if mobile is not None:
+            mobile.publish(event)  # MobileServer enforces its own player-only gate
         if overlay is None or type(event).dm_only:
             return  # dm_only (secret ids/hints) never reaches the websocket
         if lan_mode and not type(event).table_safe:
@@ -319,12 +329,32 @@ def cmd_run(args) -> int:
             print(f"! overlay disabled: {e}")
 
     app.start()
+    if mobile_enabled:
+        from .mobile_server import MobileServer
+
+        try:
+            mobile = MobileServer(app, config.mobile.port, config.mobile.listen)
+            mobile.start()
+            for line in mobile_announcement(config.mobile.listen, mobile.port):
+                print(line)
+        except Exception as e:
+            if mobile is not None:
+                mobile.stop()
+            mobile = None
+            print(f"! mobile server disabled: {e}")
     print("\n" + quickstart(app, config, voice_on=recorder is not None) + "\n")
 
-    action = _run_repl(app, config, ptt_enabled=recorder is not None)
-    app.shutdown(summarize=(action == "end"))  # end-of-session events still broadcast
-    if overlay is not None:
-        overlay.stop()
+    action = "quit"
+    try:
+        action = _run_repl(app, config, ptt_enabled=recorder is not None)
+    finally:
+        try:
+            app.shutdown(summarize=(action == "end"))  # final events still broadcast
+        finally:
+            if mobile is not None:
+                mobile.stop()
+            if overlay is not None:
+                overlay.stop()
     print("Farewell.")
     return 0
 
@@ -361,6 +391,17 @@ def overlay_announcement(listen: str, port: int) -> list[str]:
         "! it broadcasts play events only — GM notes, secrets, and console",
         "! output never leave this machine.",
     ]
+
+
+def mobile_announcement(listen: str, port: int) -> list[str]:
+    host = lan_address(listen)
+    if ":" in host:
+        host = f"[{host}]"
+    lines = [f"Mobile server: ws://{host}:{port}/ws"]
+    if not is_loopback(listen):
+        lines.append("! anyone on this network can control the NPC; "
+                     "no authentication or encryption. Player events only.")
+    return lines
 
 
 def quickstart(app, config, voice_on: bool) -> str:
@@ -543,6 +584,8 @@ def main(argv=None) -> int:
                    help="print per-stage turn timings after each reply")
     p.add_argument("--overlay", action="store_true",
                    help="serve the OBS/table overlay (forces [overlay] enabled)")
+    p.add_argument("--mobile", action="store_true",
+                   help="serve the player WebSocket API (forces [mobile] enabled)")
     p = add("doctor", cmd_doctor, "check (and set up) everything the NPC needs",
             campaign_optional=True)
     p.add_argument("--fix", action="store_true",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Protocol
 
@@ -28,12 +28,14 @@ def download_hint(voice: str, voices_dir: Path) -> str:
 
 
 class PiperSpeaker:
-    def __init__(self, voice_path: Path, player: AudioPlayer | None = None):
+    def __init__(self, voice_path: Path, player: AudioPlayer | None = None, *,
+                 on_audio: Callable[[np.ndarray, int], None] | None = None):
         from piper import PiperVoice
 
         self._voice = PiperVoice.load(str(voice_path))
         self._player = player or AudioPlayer()
         self._cancel = threading.Event()
+        self.on_audio = on_audio
 
     def synthesize(self, text: str) -> tuple[np.ndarray, int]:
         chunks = []
@@ -51,7 +53,21 @@ class PiperSpeaker:
     def say(self, text: str) -> None:
         samples, sample_rate = self.synthesize(text)
         if len(samples):
-            self._player.play(samples, sample_rate)
+            self._play(samples, sample_rate)
+
+    def _play(self, samples: np.ndarray, sample_rate: int) -> None:
+        """Observe only audio that starts playback, after dialogue sanitization.
+
+        Observers must enqueue and return promptly. Their failures cannot affect
+        local playback; synthesize() and Speaker.say() keep their old contracts.
+        """
+        observer = getattr(self, "on_audio", None)
+        if observer is not None:
+            try:
+                observer(samples, sample_rate)
+            except Exception:
+                pass
+        self._player.play(samples, sample_rate)
 
     def say_stream(self, sentences: Iterable[str]) -> tuple[list[str], bool]:
         """Synthesize and play sentence-by-sentence: synthesis (the caller's
@@ -74,7 +90,7 @@ class PiperSpeaker:
                 if self._cancel.is_set():
                     continue  # keep draining so the producer never blocks
                 spoken.append(text)
-                self._player.play(samples, sample_rate)
+                self._play(samples, sample_rate)
 
         player_thread = threading.Thread(target=playback, daemon=True, name="tts-stream")
         player_thread.start()

@@ -52,7 +52,12 @@ ci-dessus ; ce ne sont pas des applications autonomes `.exe` ou `.app`.
    pour générer les fichiers d’un personnage exemple. Les fichiers existants
    ne sont jamais remplacés. Le dossier `examples/rusty-lantern` permet aussi
    de découvrir une campagne prête à jouer.
-2. Cliquer sur **Préparer les modèles**. Cette action peut télécharger plusieurs
+2. Dans **Langue des personnages**, choisir **Campagne (par défaut)** ou un
+   personnage, puis sa langue : **English**, **Français (France)**,
+   **Français (Suisse)**, **Français (Canada / Québec)** ou **Français (Belgique)**.
+   **Suivre la campagne** retire la préférence propre au personnage. Les choix
+   sont enregistrés dans `config.toml`. Ils se modifient entre deux sessions.
+   Cliquer sur **Préparer les modèles**. Cette action peut télécharger plusieurs
    gigaoctets : le modèle Ollama, Whisper et les voix Piper configurées. Les
    résultats et erreurs s’affichent dans la fenêtre. Pour LM Studio, Jan ou un
    autre serveur compatible, charger le modèle depuis cette application.
@@ -78,8 +83,16 @@ téléchargements en cours peuvent rester incomplets. Les transcriptions déjà
 - Éditer `config.toml` dans le dossier de campagne pour choisir le serveur,
   le modèle et la voix. Les valeurs par défaut utilisent
   `qwen2.5:7b-instruct`, Whisper `small` et Piper `en_GB-alba-medium`.
-- Les réponses sont actuellement imposées **en anglais** par le moteur.
-  L’interface française ne change pas cette règle.
+- Les personnages répondent dans la langue choisie. Le français utilise par défaut
+  la voix Piper `fr_FR-siwis-medium`. Les voix personnalisées dans `[tts] voice`
+  et `[tts.voices]` restent prioritaires ; choisir une voix adaptée à la langue.
+- Les variantes suisses, canadiennes et belges guident le vocabulaire et les
+  expressions. L’accent audio dépend du modèle vocal : une variante régionale
+  ne transforme pas l’accent de la voix Piper.
+- En configuration manuelle, `language = "fr"` en tête de fichier choisit le
+  français pour la campagne. Sous `[character_languages]`, écrire par exemple
+  `korval = "fr-CA"` pour `characters/korval.md`, ou `character = "fr-CH"` pour
+  le personnage racine. Les autres codes sont `en`, `fr` et `fr-BE`.
 - Autoriser l’accès au micro pour Python ou l’application de lancement dans
   les paramètres de confidentialité Windows/macOS. Vérifier également les
   périphériques d’entrée et de sortie par défaut du système.

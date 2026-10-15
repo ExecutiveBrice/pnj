@@ -6,6 +6,7 @@ import queue
 from pathlib import Path
 
 from .desktop import DesktopProcess
+from .languages import LANGUAGES
 
 
 class DesktopWindow:
@@ -51,6 +52,24 @@ class DesktopWindow:
         self.new_button = ttk.Button(campaign_frame, text="Créer…", command=self.create)
         self.new_button.pack(side="left")
 
+        languages = ttk.LabelFrame(body, text="Langue des personnages", padding=12)
+        languages.pack(fill="x", pady=(12, 0))
+        self.language_target = tk.StringVar(value="Campagne (par défaut)")
+        self.language_target_picker = ttk.Combobox(
+            languages, textvariable=self.language_target, state="readonly", width=28)
+        self.language_target_picker.pack(side="left", padx=(0, 8))
+        self.language_target_picker.bind("<<ComboboxSelected>>", self.refresh_language)
+        self.language = tk.StringVar()
+        self.language_picker = ttk.Combobox(
+            languages, textvariable=self.language, state="readonly", width=29)
+        self.language_picker.pack(side="left")
+        self.language_picker.bind("<<ComboboxSelected>>", self.change_language)
+        ttk.Label(languages, text="Vocabulaire régional ; accent selon la voix.",
+                  style="Subtitle.TLabel", wraplength=170).pack(side="left", padx=(10, 0))
+        self.path.trace_add("write", lambda *args: self.refresh_languages())
+        self.path_entry.bind("<FocusOut>", lambda event: self.refresh_languages())
+        self.refresh_languages()
+
         actions = ttk.Frame(body)
         actions.pack(fill="x", pady=12)
         self.prepare_button = ttk.Button(actions, text="Préparer les modèles", command=self.prepare)
@@ -73,7 +92,7 @@ class DesktopWindow:
 
         self.status = tk.StringVar(value="Prêt à démarrer")
         ttk.Label(body, textvariable=self.status, style="Subtitle.TLabel").pack(anchor="w")
-        self.log = ScrolledText(body, wrap="word", height=10, state="disabled",
+        self.log = ScrolledText(body, wrap="word", height=6, state="disabled",
                                 font=("Helvetica", 12),
                                 background="#f7f9fc", foreground="#1d2b3a",
                                 relief="flat", padx=14, pady=12)
@@ -105,7 +124,7 @@ class DesktopWindow:
                                 command=lambda line=command: self.send_line(line))
             button.pack(side="left", padx=(0, 4))
             self.shortcuts.append(button)
-        ttk.Label(body, text="Ollama doit être installé et lancé. Les réponses restent en anglais. "
+        ttk.Label(body, text="Ollama doit être installé et lancé. Choisissez la langue avant la session. "
                   "Micro : cliquez pour enregistrer, puis pour envoyer.",
                   style="Subtitle.TLabel", wraplength=820).pack(anchor="w", pady=(10, 0))
         self.append("Choisissez une campagne ou créez-en une, puis préparez les modèles "
@@ -128,6 +147,8 @@ class DesktopWindow:
         for widget in (self.path_entry, self.browse_button, self.new_button,
                        self.prepare_button, self.start_button, self.mic_option):
             widget.configure(state="disabled" if busy else "normal")
+        for picker in (self.language_target_picker, self.language_picker):
+            picker.configure(state="disabled" if busy else "readonly")
         self.stop_button.configure(state="normal" if live else "disabled")
         self.force_button.configure(state="normal" if busy and
                                     (self.stopping or self.preparing or not self.ready)
@@ -138,6 +159,59 @@ class DesktopWindow:
         self.record_button.configure(state="normal" if live and self.microphone else "disabled",
                                      text="Envoyer l’enregistrement" if self.recording
                                      else "Enregistrer")
+
+    def refresh_languages(self):
+        from .roster import discover_character_files, read_display_name
+
+        self.language_targets = {"Campagne (par défaut)": None}
+        path = Path(self.path.get()).expanduser()
+        try:
+            for ref in discover_character_files(path):
+                name = read_display_name(ref.path.read_text(encoding="utf-8"), ref.stem)
+                self.language_targets[f"{name} ({ref.stem})"] = ref.stem
+        except OSError:
+            pass  # path may still be being typed
+        self.language_target_picker.configure(values=tuple(self.language_targets))
+        self.language_target.set("Campagne (par défaut)")
+        self.refresh_language()
+
+    def refresh_language(self, event=None):
+        from .config import ConfigError, load_config
+
+        stem = self.language_targets.get(self.language_target.get())
+        choices = [label for label, _, _ in LANGUAGES.values()]
+        if stem is not None:
+            choices.insert(0, "Suivre la campagne")
+        self.language_picker.configure(values=choices)
+        try:
+            config = load_config(Path(self.path.get()))
+            code = config.character_languages.get(stem) if stem else config.language
+            self.language.set(LANGUAGES[code][0] if code else "Suivre la campagne")
+        except (ConfigError, OSError):
+            self.language.set("")
+
+    def change_language(self, event=None):
+        from tkinter import messagebox
+
+        from .config import ConfigError, save_language
+
+        if self.engine.process is not None:
+            return
+        code = next((key for key, value in LANGUAGES.items()
+                     if value[0] == self.language.get()), "inherit")
+        stem = self.language_targets.get(self.language_target.get())
+        path = Path(self.path.get()).expanduser()
+        try:
+            if not path.is_dir():
+                raise ValueError("Choisissez d’abord un dossier de campagne existant.")
+            save_language(path, code, stem)
+        except (ConfigError, OSError, ValueError) as exc:
+            messagebox.showerror("Langue non enregistrée", str(exc), parent=self.root)
+            self.refresh_language()
+            return
+        self.append(f"Langue enregistrée — {self.language_target.get()} : "
+                    f"{self.language.get()}. Préparez les modèles avant de démarrer "
+                    "pour télécharger les voix manquantes.")
 
     def browse(self):
         from tkinter import filedialog

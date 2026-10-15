@@ -282,7 +282,8 @@ def npc_lore_checks(config: Config) -> list[CheckResult]:
             system = build_system_prompt(
                 slot.character, adventure,
                 slot.logbook.tail(config.logbook_sessions_in_prompt),
-                [], secrets=slot.secrets, lore=slot.lore)
+                [], secrets=slot.secrets, lore=slot.lore,
+                language=config.language_for(slot.stem))
             used = estimate_tokens(system) + 1500  # history + reply allowance
             budget = config.llm.num_ctx or 4096
             if used > budget:

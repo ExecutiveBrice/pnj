@@ -28,7 +28,8 @@ def test_desktop_controls_stay_inside_window(window, geometry):
     root.geometry(geometry)
     root.update()
     for widget in (window.path_entry, window.start_button, window.mic_option,
-                   window.entry, window.record_button, *window.shortcuts):
+                   window.entry, window.record_button, window.language_target_picker,
+                   window.language_picker, *window.shortcuts):
         assert widget.winfo_ismapped()
         x = widget.winfo_rootx() - root.winfo_rootx()
         y = widget.winfo_rooty() - root.winfo_rooty()
@@ -69,3 +70,29 @@ def test_desktop_player_gm_and_shutdown_controls(window):
     assert engine.sent[-1] == ("shutdown", {"summarize": True})
     assert str(window.entry["state"]) == "disabled"
     assert str(window.force_button["state"]) == "normal"
+
+
+def test_desktop_saves_campaign_and_character_language(window):
+    from pathlib import Path
+
+    from npc.config import load_config
+
+    window.language.set("Français (Belgique)")
+    window.change_language()
+    config = load_config(Path(window.path.get()))
+    assert config.language == "fr-BE"
+    target = next(label for label, stem in window.language_targets.items() if stem == "character")
+    window.language_target.set(target)
+    window.refresh_language()
+    assert window.language.get() == "Suivre la campagne"
+    window.language.set("Français (Suisse)")
+    window.change_language()
+    window.refresh_languages()
+    window.language_target.set(target)
+    window.refresh_language()
+    assert window.language.get() == "Français (Suisse)"
+    config = load_config(Path(window.path.get()))
+    assert config.language_for("character") == "fr-CH"
+    window.language.set("Suivre la campagne")
+    window.change_language()
+    assert load_config(Path(window.path.get())).language_for("character") == "fr-BE"

@@ -1,6 +1,7 @@
 # npc campaign configuration — every key is optional; defaults shown.
 # NOTE: these top-level keys must stay ABOVE the [sections].
 
+# language = "en"                  # en, fr (France), fr-CH (Swiss), fr-CA (Canada/Quebec), fr-BE (Belgium)
 # history_limit = 30                # messages of dialogue kept in the prompt
 # logbook_sessions_in_prompt = 3    # previous session summaries the NPC remembers
 # checkpoint_every_turns = 20       # auto-save logbook every N player turns
@@ -20,7 +21,7 @@
 
 [stt]
 # model = "small"                   # whisper size: tiny/base/small/medium/large-v3
-# language = "auto"                 # "auto" understands Swedish and English; pin with "sv"/"en"
+# language = "auto"                 # auto-detect; pin with "fr", "sv" or "en"
 # device = "auto"                   # auto/cpu/cuda
 # silence_threshold_db = -45        # clips quieter than this (dBFS) are discarded as silence
 #                                   # raise it (e.g. -35) if room noise triggers phantom replies
@@ -28,7 +29,7 @@
 # vad_max_seconds = 30              # tap mode: hard cap on one utterance
 
 [tts]
-# voice = "en_GB-alba-medium"       # Piper voice (Alba, British English)
+# voice = "en_GB-alba-medium"       # optional override; French defaults to fr_FR-siwis-medium
 # voices_dir = "~/.local/share/npc/voices"
 
 # [tts.voices]                      # per-NPC voices; key = character file stem
@@ -43,8 +44,20 @@
 #                                   # unencrypted + visible to the whole network; LAN mode sends
 #                                   # play events only (GM notes & secrets never leave the machine)
 
+[mobile]
+# enabled = false                   # player WebSocket API, additional to CLI/overlay
+# listen = "127.0.0.1"              # explicit LAN opt-in: your IP or "0.0.0.0"
+# port = 8766                       # ws://127.0.0.1:8766/ws (no authentication/encryption)
+
 [hotkey]
 # key = "KEY_SPACE"                 # any evdev key name, e.g. KEY_RIGHTCTRL, KEY_F12
 # mode = "hold"                     # "hold" = push-to-talk; "tap" = tap once, silence ends it
 # device = ""                       # pin one device, e.g. "/dev/input/by-id/usb-...-event-kbd"
 # grab = false                      # true = take the device exclusively (dedicated buttons only!)
+
+# [character_languages]             # per-NPC language; key = character file stem
+# character = "fr-CH"               # campaign-root character.md
+# korval = "fr-CA"                  # characters/korval.md
+# vess = "fr-BE"                    # absent entry = inherit campaign language
+# Regional vocabulary is prompted; the actual accent depends on the Piper voice.
+# Use [tts.voices] to override individual voices; explicit voices are preserved.

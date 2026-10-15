@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import glob
 import selectors
+import sys
 import threading
 from typing import Callable
 
@@ -18,6 +19,8 @@ class HotkeyUnavailable(Exception):
 
 
 def keycode_from_name(name: str) -> int:
+    if sys.platform != "linux":
+        raise HotkeyUnavailable("global push-to-talk requires Linux; use `npc gui` instead")
     from evdev import ecodes
 
     try:

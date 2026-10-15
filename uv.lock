@@ -978,7 +978,7 @@ name = "ttrpg-npc"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
-    { name = "evdev" },
+    { name = "evdev", marker = "sys_platform == 'linux'" },
     { name = "faster-whisper" },
     { name = "httpx" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1005,7 +1005,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "evdev", specifier = ">=1.7" },
+    { name = "evdev", marker = "sys_platform == 'linux'", specifier = ">=1.7" },
     { name = "faster-whisper", specifier = ">=1.1" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "numpy", specifier = ">=1.26" },

@@ -46,9 +46,54 @@ This separation is absolute by design: the LLM can never mistake table chatter
 for stage direction, and your players can never "prompt-inject" the NPC by
 talking to it.
 
+## Desktop interface (Windows 11 / macOS / Linux)
+
+The native Python desktop interface can create/open campaigns, download the
+configured models, start/stop a session, send player dialogue or GM notes,
+and record the microphone with an on-screen button. It runs the Python engine
+in a separate process so model loading and generation do not block the window.
+It does not require WSL or the Linux global hotkey.
+
+Install Python 3.12 **with Tcl/Tk** (the python.org installer includes it),
+[uv](https://docs.astral.sh/uv/getting-started/installation/), and
+[Ollama](https://ollama.com/download). Start Ollama, then from this clone:
+
+```bash
+uv run --python 3.12 --frozen npc gui
+# Optional: open a campaign immediately
+uv run --python 3.12 --frozen npc gui examples/rusty-lantern
+```
+
+Alternatively, double-click **Lancer NPC.bat** on Windows or
+**Lancer NPC.command** on macOS. These launchers use uv to install the locked
+dependencies on first launch; internet is required for that setup. They are
+source launchers, not standalone .exe/.app bundles. After an installed-package
+setup, `npc-gui` also opens the window without a console on Windows.
+
+In the window, choose/create a campaign, click **Préparer les modèles**, then
+**Démarrer**. Preparation downloads Whisper, the configured Ollama model and
+Piper voices; external API backends still require loading their model in their
+own app. Use **Parole du joueur** for dialogue, **Note du MJ** for instructions,
+or **Commande** for `/npc name`, `/save`, etc. Click **Enregistrer**, speak,
+then click **Envoyer l’enregistrement**. Allow microphone access for Python
+in your OS settings. This button works independently of `[hotkey]` settings.
+**Terminer et mémoriser** waits for pending turns and writes the final summary.
+**Forcer l’arrêt** can interrupt startup, downloads, or shutdown; it cannot
+guarantee a final summary. Replies still use the project's English-only rules.
+
+If Tkinter is missing, install a Python distribution with Tcl/Tk and recreate
+the virtual environment using that interpreter. On Linux, install the
+distribution's `python3-tk` package; on macOS with Homebrew Python, use the
+matching `python-tk` package. Audio still needs the system's default input and
+output devices. The desktop uses the campaign's `config.toml` for server,
+model, language and voice settings; the OBS overlay remains a CLI feature.
+
+[Guide d’installation en français](docs/desktop-fr.md).
+
 ## Requirements
 
-- Linux (X11 or Wayland — push-to-talk works on both)
+- Windows 11 / macOS for the desktop interface, or Linux (X11 or Wayland for
+  the terminal's global push-to-talk)
 - Python ≥ 3.11 and [uv](https://docs.astral.sh/uv/)
 - A local LLM server: [Ollama](https://ollama.com) (default) — **or** any app
   serving an OpenAI-compatible API, like [Jan](https://jan.ai),

@@ -1,24 +1,29 @@
-# The Rusty Lantern — house facts
+# La Lanterne rouillée — informations sur l'auberge
 
-The inn has stood ninety years; the lantern over the door came off the wreck
-of the *Corron's Pride* and is never allowed to go out. Six guest rooms
-upstairs (two coppers a night, three with breakfast), stabling for eight
-horses, and a common room that seats forty on market days.
+L'auberge est debout depuis quatre-vingt-dix ans ; la lanterne au-dessus de
+la porte provient de l'épave de la *Fierté de Corron* et ne doit jamais
+s'éteindre. Six chambres à l'étage (deux pièces de cuivre la nuit, trois
+avec le petit déjeuner), des écuries pour huit chevaux et une salle commune
+qui accueille quarante personnes les jours de marché.
 
-Regulars: Halla the ferrywoman (mulled wine, pays her tab on the new moon);
-Brothers Otten and Juul, eel-fishers who argue chess every evening; Sergeant
-Wick from the toll post, who drinks alone and tips too well; and Granny
-Ashe, who has occupied the fireside chair since before Mera's time and
-claims to have kissed a king.
+Les habitués : Halla la passeuse (vin chaud, règle son ardoise à la nouvelle
+lune) ; les frères Otten et Juul, pêcheurs d'anguilles qui se disputent aux
+échecs chaque soir ; le sergent Wick du poste de péage, qui boit seul et
+laisse des pourboires trop généreux ; et la mère Ashe, installée dans le
+fauteuil près du feu depuis bien avant l'arrivée de Mera, qui prétend avoir
+embrassé un roi.
 
-The kitchen serves eel pie, salt bread, and a fish stew Mera calls
-"whatever the brothers brought". The good brandy lives under the counter and
-costs a silver — asking for "Dannic's shelf" gets you the better bottle.
+La cuisine sert de la tourte à l'anguille, du pain salé et un ragoût de
+poisson que Mera appelle « ce que les frères ont rapporté ». La bonne
+eau-de-vie se trouve sous le comptoir et coûte une pièce d'argent ; demander
+« la réserve de Dannic » permet d'obtenir la meilleure bouteille.
 
-Prices on the road: ferry at Halla's crossing, one copper a head, two for a
-horse. The toll post at Bram's Crossing charges five coppers a cart since
-the new royal tariff — feelings about this run hot.
+Tarifs sur la route : au bac de Halla, une pièce de cuivre par personne,
+deux pour un cheval. Le poste de péage du Passage de Bram réclame cinq
+pièces de cuivre par charrette depuis le nouveau tarif royal, ce qui
+échauffe les esprits.
 
-The marsh road floods at spring tide; the plank causeway by the leaning
-birch is the only safe crossing then. Nobody rides the marsh at night —
-lights are seen out there, and sensible folk let them be.
+La route des marais est inondée lors des grandes marées ; la chaussée de
+planches près du bouleau penché est alors le seul passage sûr. Personne ne
+traverse les marais à cheval la nuit : on y aperçoit des lumières, et les
+gens sensés les laissent tranquilles.

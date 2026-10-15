@@ -5,6 +5,7 @@ and refuses to start only on hard failures (Ollama + model)."""
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,7 +38,8 @@ def whisper_detail(device: str) -> str:
     return f"cached, running on {device}"
 
 
-def run_checks(config: Config, deep: bool = False) -> list[CheckResult]:
+def run_checks(config: Config, deep: bool = False, *,
+               check_hotkey: bool = True) -> list[CheckResult]:
     checks: list[CheckResult] = []
 
     # 1. LLM server (Ollama or any OpenAI-compatible app)
@@ -46,12 +48,14 @@ def run_checks(config: Config, deep: bool = False) -> list[CheckResult]:
     client = make_llm_client(config.llm)
     is_ollama = isinstance(client, OllamaClient)
     up = client.is_up()
+    ollama_fix = ("curl -fsSL https://ollama.com/install.sh | sh   "
+                  "# then: systemctl --user start ollama  (or)  sudo systemctl start ollama"
+                  if sys.platform == "linux" else
+                  "install Ollama from https://ollama.com/download and launch the app")
     checks.append(CheckResult(
         "LLM server", up, hard=True,
         detail=f"{config.llm.backend} at {config.llm.host}",
-        fix=("curl -fsSL https://ollama.com/install.sh | sh   "
-             "# then: systemctl --user start ollama  (or)  sudo systemctl start ollama"
-             if is_ollama else
+        fix=(ollama_fix if is_ollama else
              "start your LLM app (Jan, LM Studio, …) and enable its local API "
              "server; put its address in config.toml under [llm] host"),
     ))
@@ -135,10 +139,13 @@ def run_checks(config: Config, deep: bool = False) -> list[CheckResult]:
     except Exception as e:
         checks.append(CheckResult(
             "Audio subsystem", False, detail=str(e),
-            fix="sudo apt install libportaudio2",
+            fix=("sudo apt install libportaudio2" if sys.platform == "linux" else
+                 "reinstall sounddevice and check the system audio permissions/devices"),
         ))
 
     # 6. Push-to-talk key readable
+    if not check_hotkey:
+        return checks  # desktop microphone is controlled by an on-screen button
     from .hotkey import HotkeyUnavailable, find_ptt_devices, keycode_from_name
 
     try:
@@ -151,7 +158,9 @@ def run_checks(config: Config, deep: bool = False) -> list[CheckResult]:
     except HotkeyUnavailable as e:
         checks.append(CheckResult(
             f"Push-to-talk ({config.hotkey.key})", False, detail=str(e),
-            fix="sudo usermod -aG input $USER   # then log out and back in",
+            fix=("sudo usermod -aG input $USER   # then log out and back in"
+                 if sys.platform == "linux" else
+                 "npc gui   # use the desktop recording button"),
         ))
 
     return checks

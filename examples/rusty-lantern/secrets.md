@@ -1,21 +1,24 @@
 # Secrets — Mera Vex
 
-Clues in this file are LOCKED: Mera sees only the `hint:` lines, never the
-text below them, until you approve a reveal at the table (`/yes`, `/no`,
-`/later` — add a note to steer, e.g. `/yes but only vaguely`).
+Les indices de ce fichier sont VERROUILLÉS : Mera ne voit que les lignes
+`hint:`, jamais le texte qui les suit, jusqu'à ce que vous autorisiez une
+révélation à la table (`/yes`, `/no`, `/later` ; ajoutez une précision pour
+orienter la réponse, par exemple `/yes mais reste vague`).
 
 ## dannic-poisoning
-hint: what really killed old Dannic, the previous innkeeper — she will only say it to people she trusts
+hint: ce qui a vraiment tué le vieux Dannic, l'ancien aubergiste — elle ne le dira qu'à des personnes en qui elle a confiance
 
-Dannic was poisoned with widow's cap mushroom over several weeks. Mera found
-the dried caps hidden in a flour sack after he died, and burned them. She
-suspects the toll clerk Aldous Pike, who dined free every week and pressed
-Dannic to sell the Lantern to the toll office.
+Dannic a été empoisonné pendant plusieurs semaines avec un champignon appelé
+« chapeau de veuve ». Après sa mort, Mera a trouvé les chapeaux séchés cachés
+dans un sac de farine et les a brûlés. Elle soupçonne Aldous Pike, l'employé
+du péage, qui mangeait gratuitement chaque semaine et poussait Dannic à
+vendre la Lanterne au bureau de péage.
 
 ## cellar-door
-hint: what is behind the third cellar arch, and who uses it
+hint: ce qui se trouve derrière la troisième arche de la cave, et qui s'en sert
 mode: deflect
 
-Behind the third arch a brick passage runs to the old salt cave on the
-shore. The smuggler crews use it two nights a month at the dark of the moon;
-Mera takes a cut in coin and silence, as Dannic did before her.
+Derrière la troisième arche, un passage en briques mène à l'ancienne grotte
+à sel du rivage. Les bandes de contrebandiers l'empruntent deux nuits par
+mois, à la nouvelle lune ; Mera touche sa part en pièces et en silence,
+comme Dannic avant elle.

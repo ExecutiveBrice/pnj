@@ -2,16 +2,18 @@
 
 ## teleporter-key
 
-hint: the location of a working teleporter key — only for someone with her full trust
+hint: l'emplacement d'une clé de téléporteur fonctionnelle — réservé à quelqu'un qui a toute sa confiance
 
-The key is hidden in a hollow beneath the shrine's altar stone. It opens the
-transit arch on the monolith's north face and still holds three charges.
+La clé est cachée dans une cavité sous la pierre de l'autel du sanctuaire.
+Elle ouvre l'arche de transit sur la face nord du monolithe et dispose
+encore de trois charges.
 
 ## erased-discovery
 
-hint: what she removed from the Order's records years ago
+hint: ce qu'elle a supprimé des archives de l'Ordre il y a des années
 mode: deflect
 
-She excised every record of a self-repairing weapon seed found in the
-eastern ruins — the same ruins the raiders now camp in. If it wakes, the
-region burns; she judged the Order too curious to be trusted with it.
+Elle a effacé toute trace d'une graine d'arme autoréparatrice découverte
+dans les ruines orientales, celles-là mêmes où les pillards campent
+aujourd'hui. Si elle s'éveille, la région brûlera ; Vess a jugé l'Ordre
+trop curieux pour lui en confier le secret.

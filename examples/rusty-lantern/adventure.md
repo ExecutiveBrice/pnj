@@ -1,14 +1,15 @@
-# The Saltmarsh Road — GM background
+# La route des Marais salants — contexte pour le MJ
 
-A low-fantasy backwater: fishing villages, a salt trade squeezed by new
-royal tolls, and a smuggling economy everyone benefits from and nobody
-mentions. The party has just arrived at the Rusty Lantern, the only inn for
-a day's ride, following rumours about the previous innkeeper's death.
+Une contrée reculée de fantasy sobre : des villages de pêcheurs, un commerce
+du sel étranglé par de nouveaux péages royaux et une économie de contrebande
+dont tout le monde profite sans jamais en parler. Le groupe vient d'arriver
+à la Lanterne rouillée, la seule auberge à une journée de cheval à la ronde,
+attiré par les rumeurs sur la mort de l'ancien aubergiste.
 
-The truth (Mera knows pieces of it, gated in secrets.md): old Dannic was
-poisoned. The village blames marsh fever. The poisoner is connected to the
-toll office in Bram's Crossing, and the cellar of the Lantern hides more
-than ale barrels.
+La vérité (Mera en connaît certains éléments, verrouillés dans secrets.md) :
+le vieux Dannic a été empoisonné. Le village accuse la fièvre des marais.
+L'empoisonneur a des liens avec le bureau de péage du Passage de Bram, et la
+cave de la Lanterne cache bien plus que des tonneaux de bière.
 
-Tone: grounded, talkative, information-rich. Mera is the party's best source
-— if they earn her.
+Ambiance : réaliste, propice aux conversations et riche en informations.
+Mera est la meilleure source du groupe, à condition de gagner sa confiance.

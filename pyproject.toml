@@ -11,8 +11,11 @@ keywords = ["ttrpg", "tabletop", "rpg", "npc", "voice", "offline", "whisper", "p
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
+    "Environment :: MacOS X",
     "Intended Audience :: End Users/Desktop",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -20,7 +23,7 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 dependencies = [
-    "evdev>=1.7",
+    "evdev>=1.7; sys_platform == 'linux'",
     "faster-whisper>=1.1",
     "httpx>=0.27",
     "numpy>=1.26",
@@ -47,6 +50,9 @@ Changelog = "https://github.com/seetee/npc/blob/main/CHANGELOG.md"
 [project.scripts]
 npc = "npc.cli:main"
 
+[project.gui-scripts]
+npc-gui = "npc.gui:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8",
@@ -66,6 +72,7 @@ exclude = ["docs/", ".github/", "campaigns/"]
 [tool.pytest.ini_options]
 markers = [
     "integration: needs real models/services (run with `pytest -m integration`)",
+    "gui: needs a desktop display and NPC_TEST_GUI=1 (no models or microphone)",
 ]
 addopts = "-m 'not integration'"
 testpaths = ["tests"]

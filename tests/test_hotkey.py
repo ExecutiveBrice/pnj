@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 
-from evdev import ecodes
+import pytest
 
 from npc.hotkey import PTTListener, keycode_from_name
+
+ecodes = pytest.importorskip("evdev.ecodes", reason="Linux evdev hotkey tests")
 
 SPACE = ecodes.ecodes["KEY_SPACE"]
 

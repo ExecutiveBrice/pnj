@@ -1,13 +1,16 @@
-# The Glass Monolith — GM background
+# Le Monolithe de verre — contexte pour le MJ
 
-A far-future ruinscape, three days from the Glass Monolith: a shrine village in its
-shadow, a scavenger economy at the edge of the eastern ruins, and a hum in
-the ground that the old people say changed key last season.
+Un paysage de ruines dans un futur lointain, à trois jours de marche du
+Monolithe de verre : un village bâti autour d'un sanctuaire à son ombre,
+une économie de récupération aux abords des ruines orientales et un
+bourdonnement dans le sol qui, selon les anciens, a changé de tonalité
+la saison dernière.
 
-The party has come because the monolith sang for nine nights without a
-storm — the same sign that, the records claim, preceded the Kelsari
-abandoning it centuries ago. Vess knows more than she admits (see
-secrets/vess.md); Tokk has dug up something he doesn't understand and would
-very much like to sell it before it wakes up.
+Le groupe est venu parce que le monolithe a chanté pendant neuf nuits sans
+orage : le même signe qui, d'après les archives, aurait précédé son abandon
+par les Kelsari il y a des siècles. Vess en sait plus qu'elle ne l'admet
+(voir secrets/vess.md) ; Tokk a déterré quelque chose qu'il ne comprend pas
+et aimerait beaucoup le vendre avant que cela ne se réveille.
 
-Tone: wonder and unease. The relics are miracles that do not care.
+Ambiance : émerveillement et malaise. Les reliques sont des miracles
+indifférents au sort des mortels.

@@ -1,16 +1,17 @@
-# The Glass Monolith — what Vess knows cold
+# Le Monolithe de verre — ce que Vess connaît sur le bout des doigts
 
-The monolith was raised by the Kelsari civilization in the year 912 of the
-Third Reckoning. Its core is a lattice of living glass that hums at 47 hertz
-when storms approach. The Kelsari abandoned it after the Night of Falling
-Sparrows, when the lattice sang for nine days without a storm.
+Le monolithe a été érigé par la civilisation kelsari en l'an 912 du Troisième
+Décompte. Son cœur est un réseau de verre vivant qui bourdonne à 47 hertz
+à l'approche des orages. Les Kelsari l'ont abandonné après la Nuit des
+moineaux tombés, lorsque le réseau a chanté pendant neuf jours sans orage.
 
-The shrine at its base predates the current Order by four centuries; the
-altar stone is original Kelsari work and colder than the air around it in
-every season. Pilgrims leave bent coins and burnt-out charms at the north
-face, where a sealed arch of blue-black metal has never been opened in
-living memory.
+Le sanctuaire à sa base précède l'Ordre actuel de quatre siècles ; la pierre
+de l'autel est un ouvrage kelsari d'origine, plus froid que l'air ambiant en
+toute saison. Les pèlerins déposent des pièces tordues et des amulettes
+épuisées sur la face nord, où une arche scellée en métal bleu-noir n'a
+jamais été ouverte de mémoire d'homme.
 
-The only known way to silence the hum is a tuning rod of blue iron, last
-seen in the possession of the cartographer Yemi Osei-Fahl, who mapped the
-eastern ruins a generation ago and did not return from her third expedition.
+Le seul moyen connu de faire taire le bourdonnement est une tige d'accordage
+en fer bleu, vue pour la dernière fois en possession de la cartographe
+Yemi Osei-Fahl, qui a dressé la carte des ruines orientales une génération
+plus tôt et n'est pas revenue de sa troisième expédition.

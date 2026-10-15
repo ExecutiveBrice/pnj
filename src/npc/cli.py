@@ -218,6 +218,12 @@ def cmd_say(args) -> int:
     return 0
 
 
+def cmd_gui(args) -> int:
+    from .gui import main
+
+    return main(args.campaign)
+
+
 def cmd_run(args) -> int:
     from .app import NPCApp
     from .doctor import print_report, run_checks
@@ -455,8 +461,6 @@ def _ptt_callbacks(app, session, typing_key: bool, tap_mode: bool = False):
     recording (silence ends it via the VAD recorder), a second press while
     RECORDING stops it early; key release only does the terminal cleanup.
     """
-    import termios
-
     from .events import State
 
     state = {"snapshot": "", "typing": False}
@@ -486,6 +490,8 @@ def _ptt_callbacks(app, session, typing_key: bool, tap_mode: bool = False):
         if not tap_mode:
             app.on_ptt_release()
         try:
+            import termios
+
             termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
             pt_app = session.app
             saved = state["snapshot"]
@@ -529,6 +535,8 @@ def main(argv=None) -> int:
 
     add("init", cmd_init,
         "create a campaign directory (guided — answers a couple of questions)")
+    add("gui", cmd_gui, "open the desktop interface (Windows, macOS, Linux)",
+        campaign_optional=True)
     p = add("run", cmd_run, "run the NPC for a play session",
             campaign_optional=True)
     p.add_argument("--timings", action="store_true",

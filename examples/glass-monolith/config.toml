@@ -1,9 +1,9 @@
-# Glass Monolith example — a multi-NPC campaign (characters/*.md). Switch at
-# the table with /npc vess and /npc tokk.
+# Exemple du Monolithe de verre — une campagne à plusieurs PNJ (characters/*.md).
+# Passez de l'un à l'autre à la table avec /npc vess et /npc tokk.
 
 [llm]
-# num_ctx = 8192                    # headroom for Vess's lore file
+# num_ctx = 8192                    # marge pour le fichier de connaissances de Vess
 
 [tts.voices]
-# give Tokk his own voice once it's downloaded (npc doctor --fix offers to):
+# Attribuez une voix à Tokk une fois téléchargée (npc doctor --fix le propose) :
 # tokk = "en_GB-northern_english_male-medium"

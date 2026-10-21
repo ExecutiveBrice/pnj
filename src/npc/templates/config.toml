@@ -29,11 +29,15 @@
 # vad_max_seconds = 30              # tap mode: hard cap on one utterance
 
 [tts]
+# backend = "piper"                # "pocket": CPU speech with native audio streaming
+# model = "french"                 # Pocket: french (fast), french_24l, english
 # voice = "en_GB-alba-medium"       # optional override; French defaults to fr_FR-siwis-medium
+#                                   # Pocket defaults to "estelle"; also marius, javert, jean, alba, anna
 # voices_dir = "~/.local/share/npc/voices"
 
 # [tts.voices]                      # per-NPC voices; key = character file stem
 # korval = "en_GB-northern_english_male-medium"   # characters/korval.md
+# korval = "marius"                 # example when backend = "pocket"
 # character = "en_GB-alba-medium"                 # the campaign-root character.md
 #                                   # unmapped characters use the default voice above
 
@@ -45,9 +49,11 @@
 #                                   # play events only (GM notes & secrets never leave the machine)
 
 [mobile]
-# enabled = false                   # player WebSocket API, additional to CLI/overlay
+# enabled = false                   # GM companion WebSocket API, additional to CLI/overlay
 # listen = "127.0.0.1"              # explicit LAN opt-in: your IP or "0.0.0.0"
 # port = 8766                       # ws://127.0.0.1:8766/ws (no authentication/encryption)
+# local_playback = true             # false: client audio only, avoiding PC/phone echo
+  # secret_approval = true            # trusted GM remote; false for player-only clients
 
 [hotkey]
 # key = "KEY_SPACE"                 # any evdev key name, e.g. KEY_RIGHTCTRL, KEY_F12
@@ -59,5 +65,5 @@
 # character = "fr-CH"               # campaign-root character.md
 # korval = "fr-CA"                  # characters/korval.md
 # vess = "fr-BE"                    # absent entry = inherit campaign language
-# Regional vocabulary is prompted; the actual accent depends on the Piper voice.
+# Regional vocabulary is prompted; the actual accent depends on the selected voice.
 # Use [tts.voices] to override individual voices; explicit voices are preserved.

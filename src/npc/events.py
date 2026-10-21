@@ -150,6 +150,29 @@ class StatusReport(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class SecretDisclosureRequested(Event):
+    """Explicit mobile GM payload; never sent to the table overlay."""
+    dm_only: ClassVar[bool] = True
+    request_id: str
+    npc: str
+    secret: str
+    context: str
+
+
+@dataclass(frozen=True, slots=True)
+class SecretDisclosureResolved(Event):
+    dm_only: ClassVar[bool] = True
+    request_id: str
+    decision: str
+
+
+@dataclass(frozen=True, slots=True)
+class SecretDisclosuresChanged(Event):
+    """Ask mobile GM clients to refresh their complete pending snapshot."""
+    dm_only: ClassVar[bool] = True
+
+
+@dataclass(frozen=True, slots=True)
 class SecretRevealRequested(Event):
     """The NPC hit a locked topic and asks the GM to unlock it (/yes or /no)."""
     dm_only: ClassVar[bool] = True
@@ -290,6 +313,8 @@ def format_event(event: Event) -> str | None:
             return message
         case SecretPondering():
             return None  # overlay flavor; the CLI shows SecretRevealRequested
+        case SecretDisclosureRequested() | SecretDisclosureResolved() | SecretDisclosuresChanged():
+            return None  # mobile GM payloads; the CLI has its own secret events
         case Info(message=message):
             return message
         case _:

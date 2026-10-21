@@ -23,6 +23,7 @@ class DesktopWindow:
         self.stopping = False
         self.closing = False
         self.preparing = False
+        self.testing_voice = False
         root.title("NPC — Compagnon de jeu")
         root.geometry("1000x800")
         root.minsize(900, 650)
@@ -35,12 +36,12 @@ class DesktopWindow:
         style.configure("TButton", padding=(12, 7))
         style.configure("TLabelframe.Label", font=("Helvetica", 11, "bold"))
 
-        body = ttk.Frame(root, padding=24)
+        body = ttk.Frame(root, padding=18)
         body.pack(fill="both", expand=True)
         ttk.Label(body, text="Vos personnages prennent la parole", style="Title.TLabel").pack(
             anchor="w")
         ttk.Label(body, text="Une campagne, un personnage, une conversation locale.",
-                  style="Subtitle.TLabel").pack(anchor="w", pady=(4, 18))
+                  style="Subtitle.TLabel").pack(anchor="w", pady=(4, 10))
 
         campaign_frame = ttk.LabelFrame(body, text="Campagne", padding=12)
         campaign_frame.pack(fill="x")
@@ -52,7 +53,7 @@ class DesktopWindow:
         self.new_button = ttk.Button(campaign_frame, text="Créer…", command=self.create)
         self.new_button.pack(side="left")
 
-        languages = ttk.LabelFrame(body, text="Langue des personnages", padding=12)
+        languages = ttk.LabelFrame(body, text="Langue des personnages", padding=8)
         languages.pack(fill="x", pady=(12, 0))
         self.language_target = tk.StringVar(value="Campagne (par défaut)")
         self.language_target_picker = ttk.Combobox(
@@ -68,10 +69,28 @@ class DesktopWindow:
                   style="Subtitle.TLabel", wraplength=170).pack(side="left", padx=(10, 0))
         self.path.trace_add("write", lambda *args: self.refresh_languages())
         self.path_entry.bind("<FocusOut>", lambda event: self.refresh_languages())
+
+        voices = ttk.LabelFrame(body, text="Voix — même personnage sélectionné ci-dessus", padding=10)
+        voices.pack(fill="x", pady=(10, 0))
+        self.tts_backend = tk.StringVar()
+        self.backend_picker = ttk.Combobox(voices, textvariable=self.tts_backend,
+                                          state="readonly", width=17,
+                                          values=("Piper", "Pocket TTS"))
+        self.backend_picker.pack(side="left", padx=(0, 8))
+        self.backend_picker.bind("<<ComboboxSelected>>", self.change_backend)
+        self.voice = tk.StringVar()
+        self.voice_picker = ttk.Combobox(voices, textvariable=self.voice, width=30)
+        self.voice_picker.pack(side="left", fill="x", expand=True)
+        self.voice_picker.bind("<<ComboboxSelected>>", self.change_voice)
+        self.voice_picker.bind("<Return>", self.change_voice)
+        self.voice_save_button = ttk.Button(voices, text="Enregistrer", command=self.change_voice)
+        self.voice_save_button.pack(side="left", padx=8)
+        self.voice_test_button = ttk.Button(voices, text="Écouter cette voix", command=self.test_voice)
+        self.voice_test_button.pack(side="left")
         self.refresh_languages()
 
         actions = ttk.Frame(body)
-        actions.pack(fill="x", pady=12)
+        actions.pack(fill="x", pady=8)
         self.prepare_button = ttk.Button(actions, text="Préparer les modèles", command=self.prepare)
         self.prepare_button.pack(side="left")
         style.configure("Accent.TButton", background="#2458cc", foreground="white")
@@ -92,14 +111,14 @@ class DesktopWindow:
 
         self.status = tk.StringVar(value="Prêt à démarrer")
         ttk.Label(body, textvariable=self.status, style="Subtitle.TLabel").pack(anchor="w")
-        self.log = ScrolledText(body, wrap="word", height=6, state="disabled",
+        self.log = ScrolledText(body, wrap="word", height=3, state="disabled",
                                 font=("Helvetica", 12),
                                 background="#f7f9fc", foreground="#1d2b3a",
                                 relief="flat", padx=14, pady=12)
-        self.log.pack(fill="both", expand=True, pady=(8, 12))
+        self.log.pack(fill="both", expand=True, pady=(6, 8))
 
         composer = ttk.LabelFrame(body, text="Conversation", padding=12)
-        composer.pack(fill="x")
+        composer.pack(side="bottom", fill="x", before=self.log)
         self.mode = tk.StringVar(value="Parole du joueur")
         self.mode_picker = ttk.Combobox(composer, textvariable=self.mode, state="readonly",
                                         values=("Parole du joueur", "Note du MJ", "Commande"),
@@ -126,7 +145,8 @@ class DesktopWindow:
             self.shortcuts.append(button)
         ttk.Label(body, text="Ollama doit être installé et lancé. Choisissez la langue avant la session. "
                   "Micro : cliquez pour enregistrer, puis pour envoyer.",
-                  style="Subtitle.TLabel", wraplength=820).pack(anchor="w", pady=(10, 0))
+                  style="Subtitle.TLabel", wraplength=820).pack(
+                      side="bottom", anchor="w", pady=(10, 0), before=composer)
         self.append("Choisissez une campagne ou créez-en une, puis préparez les modèles "
                     "avant la première session. Les téléchargements peuvent prendre plusieurs minutes.")
         self.update_controls()
@@ -149,6 +169,11 @@ class DesktopWindow:
             widget.configure(state="disabled" if busy else "normal")
         for picker in (self.language_target_picker, self.language_picker):
             picker.configure(state="disabled" if busy else "readonly")
+        self.backend_picker.configure(state="disabled" if busy else "readonly")
+        self.voice_picker.configure(state="disabled" if busy else
+                                    "readonly" if self.tts_backend.get() == "Pocket TTS" else "normal")
+        for widget in (self.voice_save_button, self.voice_test_button):
+            widget.configure(state="disabled" if busy else "normal")
         self.stop_button.configure(state="normal" if live else "disabled")
         self.force_button.configure(state="normal" if busy and
                                     (self.stopping or self.preparing or not self.ready)
@@ -189,6 +214,84 @@ class DesktopWindow:
             self.language.set(LANGUAGES[code][0] if code else "Suivre la campagne")
         except (ConfigError, OSError):
             self.language.set("")
+        if hasattr(self, "voice_picker"):
+            self.refresh_voice()
+
+    def refresh_voice(self):
+        from .config import ConfigError, load_config
+        from .pocket import POCKET_VOICES
+
+        try:
+            config = load_config(Path(self.path.get()))
+            stem = self.language_targets.get(self.language_target.get())
+            pocket = config.tts.backend == "pocket"
+            self.tts_backend.set("Pocket TTS" if pocket else "Piper")
+            values = list(POCKET_VOICES) if pocket else sorted(
+                {path.stem for path in Path(config.tts.voices_dir).expanduser().glob("*.onnx")}
+                | {config.tts.voice} | set(config.tts.voices.values()))
+            if stem is not None:
+                values.insert(0, "Suivre la campagne")
+            self.voice_picker.configure(values=values, state="readonly" if pocket else "normal")
+            self.voice.set(config.tts.voices.get(stem, "Suivre la campagne") if stem
+                           else config.tts.voice)
+        except (ConfigError, OSError):
+            self.voice.set("")
+
+    def change_backend(self, event=None):
+        from tkinter import messagebox
+
+        from .config import ConfigError, save_tts
+
+        if self.engine.process is not None:
+            return
+        try:
+            save_tts(Path(self.path.get()), backend="pocket" if self.tts_backend.get() == "Pocket TTS"
+                     else "piper")
+            self.refresh_voice()
+            self.append(f"Moteur vocal de la campagne : {self.tts_backend.get()}. "
+                        "Préparez les modèles au premier usage. Pocket TTS précharge "
+                        "les voix sur CPU au démarrage.")
+        except (ConfigError, OSError, ValueError) as exc:
+            messagebox.showerror("Voix non enregistrée", str(exc), parent=self.root)
+            self.refresh_voice()
+
+    def change_voice(self, event=None):
+        from tkinter import messagebox
+
+        from .config import ConfigError, save_tts
+
+        if self.engine.process is not None:
+            return False
+        try:
+            value = "inherit" if self.voice.get() == "Suivre la campagne" else self.voice.get()
+            save_tts(Path(self.path.get()), voice=value,
+                     stem=self.language_targets.get(self.language_target.get()))
+            self.append(f"Voix enregistrée — {self.language_target.get()} : {self.voice.get()}.")
+            return True
+        except (ConfigError, OSError, ValueError) as exc:
+            messagebox.showerror("Voix non enregistrée", str(exc), parent=self.root)
+            self.refresh_voice()
+            return False
+
+    def test_voice(self):
+        from tkinter import messagebox
+
+        from .config import load_config
+
+        if not self.change_voice():
+            return
+        try:
+            path = Path(self.path.get())
+            config = load_config(path)
+            stem = self.language_targets.get(self.language_target.get())
+            voice = config.tts.voices.get(stem, config.tts.voice)
+            self.engine.start(path, microphone=False, test_voice=voice)
+            self.testing_voice = True
+            self.status.set("Préparation et écoute de la voix…")
+            self.append("Écoute sans LLM ni micro. Le premier chargement peut prendre du temps.")
+            self.update_controls()
+        except Exception as exc:
+            messagebox.showerror("Écoute impossible", str(exc), parent=self.root)
 
     def change_language(self, event=None):
         from tkinter import messagebox
@@ -212,6 +315,7 @@ class DesktopWindow:
         self.append(f"Langue enregistrée — {self.language_target.get()} : "
                     f"{self.language.get()}. Préparez les modèles avant de démarrer "
                     "pour télécharger les voix manquantes.")
+        self.refresh_voice()
 
     def browse(self):
         from tkinter import filedialog
@@ -319,7 +423,7 @@ class DesktopWindow:
     def close(self):
         if self.engine.process is None:
             self.root.destroy()
-        elif self.preparing or not self.ready:
+        elif self.preparing or self.testing_voice or not self.ready:
             # Startup/model loading may not yet read input; allow cancellation.
             if self.force_stop():
                 self.closing = True
@@ -356,10 +460,12 @@ class DesktopWindow:
             elif kind == "exit":
                 self.engine.acknowledge_exit()
                 self.ready = self.microphone = self.recording = self.stopping = False
-                self.status.set("Préparation terminée" if self.preparing and message["code"] == 0
+                self.status.set("Écoute terminée" if self.testing_voice and message["code"] == 0
+                                else "Préparation terminée" if self.preparing and message["code"] == 0
                                 else "Session terminée" if message["code"] == 0
                                 else "Arrêt du moteur — consultez les messages ci-dessus")
                 self.preparing = False
+                self.testing_voice = False
                 if self.closing:
                     self.root.destroy()
                     return

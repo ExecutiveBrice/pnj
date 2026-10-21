@@ -300,3 +300,76 @@ def test_make_llm_client_passes_num_ctx():
     # openai backend simply ignores it — context is server-side there
     client = make_llm_client(LlmConfig(backend="openai", num_ctx=8192))
     assert isinstance(client, OpenAICompatClient)
+
+
+@pytest.mark.parametrize("classification, expected", [
+    ("teleporter-key", "teleporter-key"), ("NONE", None),
+    ("made-up-topic", None), ("teleporter-key because you are friends", None),
+])
+def test_secret_routing_uses_only_hints_and_player_context(classification, expected):
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return reply_ok(classification)
+
+    client = make_client(handler)
+    context = [
+        {"role": "user", "content": 'PLAYER (spoken): "Where is the key?"'},
+        {"role": "assistant", "content": "An earlier refusal that must not bias routing."},
+        {"role": "user", "content": "GM NOTE (out-of-character): a standing instruction"},
+        {"role": "user", "content": 'PLAYER (spoken): "Can I hug you?"'},
+    ]
+    assert client.select_secret_topic(
+        "Can I hug you?", {"teleporter-key": "where a key is hidden"}, context) == expected
+    payload = json.loads(seen["messages"][-1]["content"])
+    assert seen["temperature"] == 0.0
+    assert payload["latest_player_request"] == "Can I hug you?"
+    assert payload["topics"] == {"teleporter-key": "where a key is hidden"}
+    assert payload["earlier_player_lines"] == [context[0]["content"]]
+    assert "earlier refusal" not in seen["messages"][-1]["content"]
+    assert "standing instruction" not in seen["messages"][-1]["content"]
+
+
+def test_ollama_secret_routing_is_deterministic_without_changing_dialogue_sampling():
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "NONE"},
+                                        "done": True})
+
+    client = OllamaClient("http://localhost:11434", "m", num_ctx=8192,
+                          transport=httpx.MockTransport(handler))
+    assert client.select_secret_topic("Where is the key?", {"key": "where a key is hidden"}, []) is None
+    client.chat("SYSTEM", [])
+    assert requests[0]["options"] == {"num_ctx": 8192, "temperature": 0.0}
+    assert requests[1]["options"] == {"num_ctx": 8192}
+
+
+@pytest.mark.parametrize("line", [
+    "Oui, une clé, c'est ça, c'est Tokk qui m'en a parlé.",
+    "Un téléporteur, j'en ai bien entendu parler.",
+    "Je passe quand même et je me sers.",
+    "Utilisez le téléporteur et allez piller l'autre côté.",
+    "Yes, a key, the merchant told me about it.",
+    "I am going in anyway and taking things.",
+])
+def test_statements_cannot_become_implicit_secret_questions(line):
+    def unexpected_call(request):
+        pytest.fail("A statement should stay in ordinary dialogue without a routing request")
+
+    client = make_client(unexpected_call)
+    context = [{"role": "user", "content": 'PLAYER (spoken): "Where is the key?"'},
+               {"role": "user", "content": f'PLAYER (spoken): "{line}"'}]
+    assert client.select_secret_topic(line, {"key": "where a key is hidden"}, context) is None
+
+
+@pytest.mark.parametrize("line", [
+    "Où est la clé", "Dis-moi où elle est", "Where is the key", "Tell me about the key",
+    "Je voudrais savoir ce que vous avez effacé", "Et son emplacement ?",
+    "Qu'avez-vous supprimé des archives", "Qui a caché la clé",
+])
+def test_spoken_information_requests_without_question_punctuation_are_routed(line):
+    client = make_client(lambda request: reply_ok("key"))
+    assert client.select_secret_topic(line, {"key": "where a key is hidden"}, []) == "key"

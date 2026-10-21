@@ -13,6 +13,7 @@ class StubPiperSpeaker(PiperSpeaker):
     def __init__(self, player):
         self._player = player
         self._cancel = threading.Event()
+        self.local_playback = True
 
     def synthesize(self, text):
         return np.ones(len(text), dtype=np.int16), 22_050

@@ -70,6 +70,11 @@ dependencies on first launch; internet is required for that setup. They are
 source launchers, not standalone .exe/.app bundles. After an installed-package
 setup, `npc-gui` also opens the window without a console on Windows.
 
+The Windows launcher detects NVIDIA GPUs with `nvidia-smi` and automatically
+enables the CUDA dependencies for Whisper. The first GPU launch downloads these
+additional libraries. To enable them from a terminal, place `--extra cuda`
+before `npc`: `uv run --python 3.12 --frozen --extra cuda npc gui`.
+
 In the window, choose/create a campaign, click **Préparer les modèles**, then
 **Démarrer**. Preparation downloads Whisper, the configured Ollama model and
 Piper voices; external API backends still require loading their model in their
@@ -77,6 +82,9 @@ own app. Use **Parole du joueur** for dialogue, **Note du MJ** for instructions,
 or **Commande** for `/npc name`, `/save`, etc. Click **Enregistrer**, speak,
 then click **Envoyer l’enregistrement**. Allow microphone access for Python
 in your OS settings. This button works independently of `[hotkey]` settings.
+On Windows and macOS, `npc doctor` and `npc run` report the Linux-only global
+hotkey as `[SKIP]`. Terminal sessions still support `/say` and mobile voice input;
+use `npc gui` to record with the PC microphone.
 **Terminer et mémoriser** waits for pending turns and writes the final summary.
 **Forcer l’arrêt** can interrupt startup, downloads, or shutdown; it cannot
 guarantee a final summary.
@@ -88,6 +96,50 @@ Canada/Quebec, Belgium). Choices are saved in the campaign's `config.toml`.
 after a change to download missing voices. French defaults to `fr_FR-siwis-medium`;
 explicit `[tts] voice` and `[tts.voices]` settings take precedence. Regional
 choices guide vocabulary and expressions; pronunciation depends on the voice model.
+
+### Pocket TTS : voix françaises et lecture progressive
+
+Le lanceur Windows **Lancer NPC.bat** installe aussi Pocket TTS, avec PyTorch
+sur CPU. Pour lancer depuis un terminal :
+
+```powershell
+uv run --python 3.12 --locked --extra pocket --extra cuda npc gui
+```
+
+Dans **Voix**, sélectionnez **Pocket TTS**. Le personnage sélectionné dans
+**Langue des personnages** détermine à qui affecter la voix : campagne par
+défaut ou personnage individuel. Choisissez `estelle`, `marius`, `javert`,
+`jean`, `alba` ou `anna`, puis **Enregistrer**. **Écouter cette voix** lance
+un extrait sans charger Ollama ni Whisper. Les choix sont enregistrés dans
+le `config.toml` de la campagne :
+
+```toml
+[tts]
+backend = "pocket"
+model = "french"
+voice = "estelle"
+
+[tts.voices]
+aubergiste = "marius"  # characters/aubergiste.md
+garde = "javert"
+```
+
+Cliquez **Préparer les modèles** une première fois avec Internet, puis
+**Démarrer**. Un seul modèle CPU est partagé entre les personnages ; leurs
+voix sont préchargées et le modèle est préchauffé silencieusement. Pendant
+une réponse, les blocs audio sont lus dès leur génération et peuvent être
+interrompus par l'enregistrement suivant. Le délai du LLM et de la transcription
+s'ajoute au délai vocal. Le PCM à 24 kHz peut également être envoyé au mode mobile.
+
+`french` privilégie la réactivité ; `french_24l` est disponible dans la configuration
+mais plus lourd. `english` est un autre profil possible : le profil vocal ne
+change pas automatiquement avec la langue de dialogue. Les variantes régionales
+agissent sur les répliques, sans garantir un accent particulier. Cette intégration
+utilise les voix prédéfinies, sans clonage ni compte Hugging Face.
+
+Les campagnes existantes restent sur Piper. Changer de moteur depuis l'interface
+conserve les affectations de chaque moteur dans `[tts.voice_presets.*]` pour les
+retrouver au retour. La démo indépendante `Tester Pocket TTS.bat` reste disponible.
 
 If Tkinter is missing, install a Python distribution with Tcl/Tk and recreate
 the virtual environment using that interpreter. On Linux, install the

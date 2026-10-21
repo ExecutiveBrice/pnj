@@ -6,8 +6,10 @@ invalid pointer" — seen in a real table-session core dump), and
 sounddevice's play() convenience function closes and reopens a stream on
 every call, which in the streaming pipeline meant several closes per reply.
 Opening the PCM once and closing it only at process exit removes that
-exposure. stop() only sets a flag; every PortAudio call stays on the
-writing thread.
+exposure. Each clip drains and stops the stream without closing it: write()
+can return with audio still buffered, and an idle active stream can underrun
+between sentences. stop() only sets a flag; every PortAudio call stays on
+the writing thread.
 """
 
 from __future__ import annotations
@@ -27,6 +29,14 @@ class AudioPlayer:
 
     def play(self, samples: np.ndarray, sample_rate: int) -> None:
         """Blocks until playback finishes or stop() is called."""
+        self.play_stream((samples,), sample_rate)
+
+    def play_stream(self, chunks, sample_rate: int, *, cancel=None) -> None:
+        """Keep the output running between PCM chunks; drain only at the end.
+
+        An external cancellation event stays set even if stop() raced startup.
+        Only this writing thread starts/stops/aborts the PortAudio stream.
+        """
         import sounddevice as sd
 
         self._abort.clear()
@@ -38,13 +48,23 @@ class AudioPlayer:
                                            dtype="int16")
             self._rate = sample_rate
         stream = self._stream
-        if not stream.active:
-            stream.start()
-        for start in range(0, len(samples), BLOCK_FRAMES):
-            if self._abort.is_set():
-                stream.abort()  # drop the buffered tail; restarted on next play
-                return
-            stream.write(samples[start:start + BLOCK_FRAMES])
+        try:
+            for samples in chunks:
+                if self._abort.is_set() or (cancel is not None and cancel.is_set()):
+                    break
+                if not stream.active:
+                    stream.start()
+                for start in range(0, len(samples), BLOCK_FRAMES):
+                    if self._abort.is_set() or (cancel is not None and cancel.is_set()):
+                        break
+                    stream.write(samples[start:start + BLOCK_FRAMES])
+        except BaseException:
+            stream.abort()  # never leave queued speech playing after a failure
+            raise
+        if self._abort.is_set() or (cancel is not None and cancel.is_set()):
+            stream.abort()  # also catch cancellation during the final write
+        elif stream.active:
+            stream.stop()  # wait for the audible tail, keeping the PCM open
 
     def stop(self) -> None:
         """Cross-thread barge-in: flag only — the writer thread reacts within

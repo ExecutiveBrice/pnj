@@ -1,0 +1,71 @@
+# Configuration de la campagne : toutes les clés sont facultatives.
+# Les paramètres généraux doivent rester au-dessus des sections entre crochets.
+language = "fr-BE"
+
+# language = "en"                  # en, fr (France), fr-CH (Suisse), fr-CA (Canada/Québec), fr-BE (Belgique)
+# history_limit = 30               # Nombre de messages de dialogue conservés dans le contexte.
+# logbook_sessions_in_prompt = 3   # Nombre de résumés de sessions transmis au personnage.
+# checkpoint_every_turns = 20      # Sauvegarde du journal tous les N tours de joueur.
+# min_clip_seconds = 0.25          # Ignore les enregistrements plus courts que cette durée.
+
+[llm]
+# backend = "ollama"               # Ou "openai" pour Jan, LM Studio, llama.cpp, vLLM, etc.
+model = "qwen2.5:7b-instruct"      # Modèle installé, vérifié pour les dialogues de cette campagne.
+# host = "http://localhost:11434"  # Jan : http://localhost:1337 ; LM Studio : http://localhost:1234.
+# timeout_seconds = 60             # Délai maximal par requête, en secondes.
+# retries = 1                      # Nouvelles tentatives après une erreur de connexion, hors erreurs HTTP.
+# stream = true                    # Génère et lit la réponse phrase par phrase.
+num_ctx = 8192                   # Taille du contexte Ollama ; à augmenter pour de longs documents.
+#                                 # Une fenêtre plus grande utilise davantage de mémoire vidéo.
+# api_key = ""                     # Serveurs compatibles OpenAI : clé stockée EN CLAIR dans ce fichier.
+#                                 # Préférer la variable d’environnement NPC_LLM_API_KEY, qui a priorité.
+
+[stt]
+model = "small"                  # Taille du modèle Whisper : tiny/base/small/medium/large-v3.
+language = "fr"                # Détection automatique ; "fr", "sv" ou "en" pour imposer une langue.
+# device = "auto"                  # auto/cpu/cuda.
+# silence_threshold_db = -45       # Les sons plus faibles que ce seuil, en dBFS, sont ignorés.
+#                                 # Augmenter le seuil, par exemple à -35, si le bruit déclenche des réponses.
+# vad_silence_seconds = 1.2        # En mode tap, durée de silence qui termine l’enregistrement.
+# vad_max_seconds = 30             # En mode tap, durée maximale d’un enregistrement.
+
+[tts]
+backend = "pocket"
+model = "french"
+voice = "estelle"
+# voice = "en_GB-alba-medium"      # Choix explicite ; en français, la voix par défaut est fr_FR-siwis-medium.
+# voices_dir = "~/.local/share/npc/voices"
+
+[tts.voices]                     # Voix par personnage ; clé = nom du fichier sans extension.
+vess = "anna"        # Pour characters/korval.md.
+tokk = "marius"          # Pour character.md à la racine de la campagne.
+#                                 # Sans correspondance, le personnage utilise la voix par défaut.
+
+[overlay]
+# enabled = false                  # Diffuse les événements et sert la page de surimpression.
+# port = 8765                      # Source navigateur OBS : http://127.0.0.1:8765.
+# listen = "127.0.0.1"             # "0.0.0.0" ou votre IP locale autorise l’accès depuis le réseau local.
+#                                 # Accès non chiffré ; seuls les événements destinés aux joueurs sont envoyés.
+#                                 # Les notes du MJ et les secrets restent sur la machine.
+
+[mobile]
+# API WebSocket destinée aux joueurs, en complément de la console et de la surimpression.
+local_playback = false
+enabled = true
+listen = "0.0.0.0"
+port = 8766
+# Adresse WebSocket : ws://ADRESSE_DU_PC:8766/ws, sans authentification ni chiffrement.
+# Mettre local_playback à true pour lire également le son sur le PC.
+
+[hotkey]
+# key = "KEY_SPACE"                # Nom de touche evdev, par exemple KEY_RIGHTCTRL ou KEY_F12.
+# mode = "hold"                    # hold : maintenir ; tap : appuyer, puis laisser le silence terminer.
+# device = ""                      # Chemin du périphérique, par exemple /dev/input/by-id/usb-...-event-kbd.
+# grab = false                     # true : accès exclusif au périphérique, pour un bouton dédié.
+
+# [character_languages]            # Langue par personnage ; clé = nom du fichier sans extension.
+# character = "fr-CH"              # Pour character.md à la racine de la campagne.
+# korval = "fr-CA"                 # Pour characters/korval.md.
+# vess = "fr-BE"                   # Sans entrée, le personnage utilise la langue de la campagne.
+# Les consignes guident le vocabulaire régional ; l’accent dépend de la voix Piper.
+# Utiliser [tts.voices] pour choisir les voix individuelles ; les choix explicites sont prioritaires.

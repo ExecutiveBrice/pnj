@@ -22,6 +22,11 @@ Depuis un terminal ouvert dans le dossier du projet :
 uv run --python 3.12 --frozen npc gui
 ```
 
+Pour utiliser Pocket TTS depuis le terminal, ajouter `--extra pocket` avant
+`npc`. Sous Windows, **Lancer NPC.bat** installe déjà cette option et utilise
+PyTorch sur CPU ; les dépendances CUDA de Whisper sont activées si une carte
+NVIDIA est détectée.
+
 Le premier lancement installe les dépendances Python. Il ne télécharge pas
 encore les modèles de conversation ou de parole.
 
@@ -48,6 +53,20 @@ ci-dessus ; ce ne sont pas des applications autonomes `.exe` ou `.app`.
 
 ## Utilisation
 
+Pour les voix Pocket TTS, choisir **Pocket TTS** dans le cadre **Voix**, puis
+une voix (`estelle`, `marius`, `javert`, `jean`, `alba` ou `anna`). La sélection
+dans **Langue des personnages** détermine si la voix est affectée à toute la
+campagne par défaut ou à un personnage. **Enregistrer** sauvegarde ce choix ;
+**Écouter cette voix** lit un extrait sans Ollama ni reconnaissance vocale.
+Le premier essai peut télécharger des fichiers. Un essai recharge son moteur
+à chaque lancement ; pendant une session, le modèle et les voix restent chargés.
+
+Pocket utilise par défaut le petit modèle français `french`, sur CPU, et lit
+les blocs audio dès leur génération. Les voix sont préparées et le modèle
+préchauffé au démarrage de la session. Piper reste disponible ; changer de
+moteur conserve les affectations pour retrouver ses voix en revenant dessus.
+Le clonage vocal n’est pas activé dans cette intégration.
+
 1. Cliquer sur **Parcourir…** pour ouvrir une campagne existante, ou **Créer…**
    pour générer les fichiers d’un personnage exemple. Les fichiers existants
    ne sont jamais remplacés. Le dossier `examples/rusty-lantern` permet aussi
@@ -58,7 +77,7 @@ ci-dessus ; ce ne sont pas des applications autonomes `.exe` ou `.app`.
    **Suivre la campagne** retire la préférence propre au personnage. Les choix
    sont enregistrés dans `config.toml`. Ils se modifient entre deux sessions.
    Cliquer sur **Préparer les modèles**. Cette action peut télécharger plusieurs
-   gigaoctets : le modèle Ollama, Whisper et les voix Piper configurées. Les
+   gigaoctets : le modèle Ollama, Whisper et les modèles/voix du moteur choisi. Les
    résultats et erreurs s’affichent dans la fenêtre. Pour LM Studio, Jan ou un
    autre serveur compatible, charger le modèle depuis cette application.
 3. Cocher **Activer le micro** si souhaité, puis cliquer sur **Démarrer**.

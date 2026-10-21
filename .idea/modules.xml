@@ -3,6 +3,8 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/npc.iml" filepath="$PROJECT_DIR$/.idea/npc.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/npc-pocket-tts-demo.iml" filepath="$PROJECT_DIR$/.idea/npc-pocket-tts-demo.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/ttrpg-npc.iml" filepath="$PROJECT_DIR$/.idea/ttrpg-npc.iml" />
     </modules>
   </component>
 </project>

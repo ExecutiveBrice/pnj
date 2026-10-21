@@ -13,7 +13,7 @@ from collections.abc import Iterable, Iterator
 # terminal punctuation, optional closing quote/bracket, then whitespace
 _SENTENCE_END = re.compile(r"[.!?…]['\"’”)\]]?\s")
 
-MIN_CHARS = 25  # merge shorter fragments into the next sentence: better prosody, fewer synth calls
+MIN_CHARS = 5  # merge shorter fragments into the next sentence: better prosody, fewer synth calls
 
 
 def iter_sentences(chunks: Iterable[str], min_chars: int = MIN_CHARS) -> Iterator[str]:

@@ -10,7 +10,35 @@ from npc.config import ConfigError, load_config
 from npc.doctor import CheckResult
 from npc.mobile_server import MobileServer
 
-from test_app_pipeline import FakeLLM
+from test_app_pipeline import FakeLLM, FakeTranscriber
+from test_tts import RecordingPlayer, StubPiperSpeaker
+
+
+@pytest.mark.parametrize("failure", ["Audio input", "Audio subsystem", "Push-to-talk"])
+@pytest.mark.parametrize("mobile_enabled", [False, True])
+def test_phone_transcription_does_not_require_pc_audio_or_hotkey(
+        campaign, monkeypatch, failure, mobile_enabled):
+    monkeypatch.setattr(doctor, "run_checks", lambda *a, **k: [
+        CheckResult(failure, False), CheckResult("Piper voice", False)])
+    monkeypatch.setattr(doctor, "print_report", lambda checks: True)
+    monkeypatch.setattr(llm, "make_llm_client", lambda config: FakeLLM())
+    transcriber = FakeTranscriber()
+    monkeypatch.setattr("npc.stt.WhisperTranscriber", lambda *a: transcriber)
+
+    class TestServer(MobileServer):
+        def start(self):
+            pass
+
+    monkeypatch.setattr("npc.mobile_server.MobileServer", TestServer)
+
+    def repl(app, config, **kwargs):
+        assert app.recorder is None
+        assert app.transcriber is (transcriber if mobile_enabled else None)
+        return "quit"
+
+    monkeypatch.setattr(cli, "_run_repl", repl)
+    args = ["run", str(campaign)] + (["--mobile"] if mobile_enabled else [])
+    assert cli.main(args) == 0
 
 
 def test_mobile_defaults_and_lan_opt_in(tmp_path):
@@ -18,15 +46,20 @@ def test_mobile_defaults_and_lan_opt_in(tmp_path):
     assert not config.mobile.enabled
     assert config.mobile.listen == "127.0.0.1"
     assert config.mobile.port == 8766
+    assert config.mobile.local_playback is True
+    assert config.mobile.secret_approval is True
     (tmp_path / "config.toml").write_text(
-        '[mobile]\nenabled = true\nlisten = "0.0.0.0"\nport = 8767\n')
+        '[mobile]\nenabled = true\nlisten = "0.0.0.0"\nport = 8767\nlocal_playback = false\n')
     mobile = load_config(tmp_path).mobile
     assert (mobile.enabled, mobile.listen, mobile.port) == (True, "0.0.0.0", 8767)
+    assert mobile.local_playback is False
 
 
 @pytest.mark.parametrize("assignment", [
     'enabled = "false"', 'listen = " "', 'listen = 4',
     'port = 0', 'port = 65536', 'port = true', 'port = "8766"',
+    'local_playback = "false"', 'local_playback = 0',
+    'secret_approval = "false"', 'secret_approval = 0',
 ])
 def test_mobile_config_rejects_invalid_types_and_values(tmp_path, assignment):
     (tmp_path / "config.toml").write_text(f"[mobile]\n{assignment}\n")
@@ -41,6 +74,48 @@ def test_mobile_announcement_and_ipv6():
     lan = cli.mobile_announcement("192.168.1.20", 8766)
     assert lan[0] == "Mobile server: ws://192.168.1.20:8766/ws"
     assert "anyone on this network can control" in lan[1]
+
+
+@pytest.mark.parametrize("mode", ["enabled", "disabled", "failure"])
+def test_client_only_audio_routes_default_and_switched_voices(campaign, monkeypatch, mode):
+    (campaign / "config.toml").write_text(
+        f'[mobile]\nenabled = {str(mode != "disabled").lower()}\nlocal_playback = false\n')
+    monkeypatch.setattr(doctor, "run_checks", lambda *a, **k: [
+        CheckResult("Whisper model", False)])
+    monkeypatch.setattr(doctor, "print_report", lambda checks: True)
+    monkeypatch.setattr(llm, "make_llm_client", lambda config: FakeLLM())
+    speakers, published = [], []
+
+    def make_speaker(path, player=None, *, on_audio=None, local_playback=True):
+        speaker = StubPiperSpeaker(RecordingPlayer())
+        speaker.on_audio = on_audio
+        speaker.local_playback = local_playback
+        speakers.append(speaker)
+        return speaker
+
+    class TestServer(MobileServer):
+        def start(self):
+            if mode == "failure":
+                raise OSError("port busy")
+
+        def publish_audio(self, samples, rate):
+            published.append((len(samples), rate))
+
+    monkeypatch.setattr("npc.tts.PiperSpeaker", make_speaker)
+    monkeypatch.setattr("npc.mobile_server.MobileServer", TestServer)
+
+    def repl(app, config, **kwargs):
+        app.speaker.say("Hello")
+        switched = app._make_speaker(config.tts.voice_path_for("other-voice"))
+        switched.say("World")
+        return "quit"
+
+    monkeypatch.setattr(cli, "_run_repl", repl)
+    assert cli.main(["run", str(campaign)]) == 0
+    assert len(speakers) == 2
+    for speaker in speakers:
+        assert speaker._player.played == ([] if mode == "enabled" else [5])
+    assert published == ([(5, 22050), (5, 22050)] if mode == "enabled" else [])
 
 
 @pytest.mark.parametrize("mode", ["default", "flag", "config", "failure", "repl_failure"])

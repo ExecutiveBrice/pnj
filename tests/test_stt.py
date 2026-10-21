@@ -62,3 +62,75 @@ def test_dbfs_levels():
 
     quiet = AudioClip((np.random.default_rng(0).normal(0, 30, 16000)).astype(np.int16))
     assert quiet.dbfs() < -45.0
+
+
+def test_windows_cuda_dlls_stay_available_for_lazy_loading(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from npc import stt
+
+    root = tmp_path / "nvidia"
+    for name in ("cublas", "cudnn", "cuda_nvrtc"):
+        (root / name / "bin").mkdir(parents=True)
+
+    def package(name):
+        module = name.removeprefix("nvidia-").removesuffix("-cu12").replace("-", "_")
+        files = [Path(module) / "bin" / "first.dll",
+                 Path(module) / "bin" / "second.dll", Path(module) / "__init__.py"]
+        return SimpleNamespace(files=files, locate_file=lambda file: root / file)
+
+    handles = []
+
+    def register(path):
+        handle = object()
+        handles.append(handle)
+        return handle
+
+    monkeypatch.setattr(stt.sys, "platform", "win32")
+    monkeypatch.setattr(stt, "distribution", package)
+    monkeypatch.setattr(stt, "_CUDA_DLL_DIRS", {})
+    monkeypatch.setattr(stt.os, "add_dll_directory", register, raising=False)
+    monkeypatch.setenv("PATH", "existing-tools")
+    stt._preload_cuda_libs()
+    stt._preload_cuda_libs()
+
+    assert len(handles) == 3
+    assert list(stt._CUDA_DLL_DIRS.values()) == handles
+    assert set(stt.os.environ["PATH"].split(stt.os.pathsep)) == {
+        str(root / name / "bin") for name in ("cublas", "cudnn", "cuda_nvrtc")
+    } | {"existing-tools"}
+
+
+def test_windows_without_cuda_packages_keeps_cpu_available(monkeypatch):
+    from npc import stt
+
+    def missing(name):
+        raise stt.PackageNotFoundError(name)
+
+    monkeypatch.setattr(stt.sys, "platform", "win32")
+    monkeypatch.setattr(stt, "distribution", missing)
+    monkeypatch.setattr(stt, "_CUDA_DLL_DIRS", {})
+    monkeypatch.setenv("PATH", "existing-tools")
+    stt._preload_cuda_libs()
+    assert stt.os.environ["PATH"] == "existing-tools"
+    assert stt._CUDA_DLL_DIRS == {}
+
+
+@pytest.mark.parametrize("device", ["auto", "cuda", "cpu"])
+def test_cuda_setup_precedes_model_loading(monkeypatch, device):
+    import sys
+
+    from npc import stt
+
+    calls = []
+
+    def model(size, device):
+        calls.append("model")
+        return SimpleNamespace(model=SimpleNamespace(device=device))
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=model))
+    monkeypatch.setattr(stt, "_preload_cuda_libs", lambda: calls.append("cuda"))
+    monkeypatch.setattr(stt, "_quiet_third_party_logs", lambda: None)
+    monkeypatch.setattr(stt.WhisperTranscriber, "_warm_up", lambda self: None)
+    stt.WhisperTranscriber(device=device)
+    assert calls == (["model"] if device == "cpu" else ["cuda", "model"])

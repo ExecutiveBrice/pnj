@@ -117,7 +117,14 @@ def test_stop_only_interrupts_speaking_with_a_speaker(app):
 def test_status_is_an_explicit_player_safe_snapshot(app):
     app.ooc_notes.append("private GM note")
     app.config.llm.api_key = "private key"
-    assert app.player_status() == {"npc": "Vess of the Glass Monolith", "state": "idle"}
+    expected = {"npc": "Vess of the Glass Monolith", "state": "idle",
+                "npcs": [{"id": "character", "name": "Vess of the Glass Monolith"},
+                         {"id": "mordrek", "name": "Mordrek"}]}
+    assert app.player_status() == expected
+    snapshot = app.player_status()
+    snapshot["npcs"][0]["name"] = "Changed on client"
+    snapshot["npcs"].clear()
+    assert app.player_status() == expected
 
 
 def test_submissions_after_shutdown_are_rejected(app):

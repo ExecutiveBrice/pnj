@@ -17,7 +17,7 @@ DEFAULT_VOICES_DIR = Path.home() / ".local" / "share" / "npc" / "voices"
 @dataclass
 class LlmConfig:
     backend: str = "ollama"  # or "openai" for Jan, LM Studio, llama.cpp, vLLM, …
-    model: str = "qwen2.5:7b-instruct"
+    model: str = "qwen2.5:3b"
     host: str = "http://localhost:11434"
     timeout_seconds: float = 60.0  # per-request cap; a hung server becomes an error, not a stuck session
     retries: int = 1  # extra attempts after connection-level failures (never after HTTP errors)
@@ -38,9 +38,12 @@ class SttConfig:
 
 @dataclass
 class TtsConfig:
+    backend: str = "piper"
+    model: str = "french"  # Pocket TTS language/profile; small French model on CPU
     voice: str = "en_GB-alba-medium"
     voices_dir: str = str(DEFAULT_VOICES_DIR)
     voices: dict[str, str] = field(default_factory=dict)  # [tts.voices]: character stem → voice
+    voice_presets: dict[str, dict[str, str]] = field(default_factory=dict)
 
     @property
     def voice_path(self) -> Path:
@@ -48,6 +51,9 @@ class TtsConfig:
 
     def voice_path_for(self, voice: str) -> Path:
         return Path(self.voices_dir).expanduser() / f"{voice}.onnx"
+
+    def voice_resource_for(self, voice: str) -> Path | str:
+        return voice if self.backend == "pocket" else self.voice_path_for(voice)
 
 
 @dataclass
@@ -63,6 +69,8 @@ class MobileConfig:
     enabled: bool = False
     listen: str = "127.0.0.1"
     port: int = 8766
+    local_playback: bool = True  # disable PC speakers when listening through a client
+    secret_approval: bool = True  # trusted GM companion; false for player-only clients
 
 
 @dataclass
@@ -162,10 +170,21 @@ def load_config(campaign_dir: Path) -> Config:
         for value in config.character_languages.values()
     ):
         raise ConfigError(f"{toml_path}: invalid [character_languages]; use {', '.join(LANGUAGES)}")
+    if config.tts.backend not in ("piper", "pocket"):
+        raise ConfigError(f'{toml_path}: tts.backend must be "piper" or "pocket"')
+    if config.tts.model not in ("french", "french_24l", "english"):
+        raise ConfigError(f'{toml_path}: tts.model must be "french", "french_24l" or "english"')
+    if not isinstance(config.tts.voice_presets, dict) or any(
+        backend not in ("piper", "pocket") or not isinstance(values, dict)
+        or any(not isinstance(value, str) for value in values.values())
+        for backend, values in config.tts.voice_presets.items()
+    ):
+        raise ConfigError(f"{toml_path}: invalid [tts.voice_presets] voice assignments")
     if "voice" not in data.get("tts", {}):
-        config.tts.voice = default_voice(config.language)
-    for stem, language in config.character_languages.items():
-        config.tts.voices.setdefault(stem, default_voice(language))
+        config.tts.voice = "estelle" if config.tts.backend == "pocket" else default_voice(config.language)
+    if config.tts.backend == "piper":
+        for stem, language in config.character_languages.items():
+            config.tts.voices.setdefault(stem, default_voice(language))
     if config.hotkey.mode not in ("hold", "tap"):
         raise ConfigError(f'{toml_path}: hotkey.mode must be "hold" or "tap", '
                           f"got {config.hotkey.mode!r}")
@@ -174,6 +193,10 @@ def load_config(campaign_dir: Path) -> Config:
                           '("127.0.0.1", your LAN IP, or "0.0.0.0")')
     if not isinstance(config.mobile.enabled, bool):
         raise ConfigError(f"{toml_path}: mobile.enabled must be a boolean")
+    if not isinstance(config.mobile.local_playback, bool):
+        raise ConfigError(f"{toml_path}: mobile.local_playback must be a boolean")
+    if not isinstance(config.mobile.secret_approval, bool):
+        raise ConfigError(f"{toml_path}: mobile.secret_approval must be a boolean")
     if not isinstance(config.mobile.listen, str) or not config.mobile.listen.strip():
         raise ConfigError(f"{toml_path}: mobile.listen must be a non-empty address")
     config.mobile.listen = config.mobile.listen.strip()
@@ -227,5 +250,69 @@ def save_language(campaign_dir: Path, language: str, stem: str | None = None) ->
             source = re.sub(pattern, lambda _: block + "\n", source)
         else:
             source = source.rstrip() + "\n\n" + block
+    tomllib.loads(source)
+    path.write_text(source, encoding="utf-8")
+
+
+def _replace_table(source: str, table: str, values: dict) -> str:
+    block = f"[{table}]\n" + "".join(
+        f"{json.dumps(key, ensure_ascii=False)} = {json.dumps(value, ensure_ascii=False)}\n"
+        for key, value in values.items())
+    pattern = rf'(?ms)^\[{re.escape(table)}\][ \t]*(?:#[^\n]*)?(?:\n|\Z).*?(?=^\[|\Z)'
+    if re.search(pattern, source):
+        return re.sub(pattern, lambda _: block + "\n", source)
+    return source.rstrip() + "\n\n" + block
+
+
+def _set_table_value(source: str, table: str, key: str, value: str) -> str:
+    """Change a single scalar without rewriting neighbouring settings/comments."""
+    pattern = rf'(?ms)^\[{re.escape(table)}\][ \t]*(?:#[^\n]*)?(?:\n|\Z).*?(?=^\[|\Z)'
+    match = re.search(pattern, source)
+    if not match:
+        return source.rstrip() + f"\n\n[{table}]\n{key} = {json.dumps(value)}\n"
+    block = match.group()
+    assignment = f"{key} = {json.dumps(value)}"
+    key_pattern = rf'(?m)^{re.escape(key)}\s*=.*$'
+    if re.search(key_pattern, block):
+        block = re.sub(key_pattern, lambda _: assignment, block)
+    else:
+        block = block.rstrip() + "\n" + assignment + "\n\n"
+    return source[:match.start()] + block + source[match.end():]
+
+
+def save_tts(campaign_dir: Path, *, backend: str | None = None,
+             voice: str | None = None, stem: str | None = None) -> None:
+    config = load_config(campaign_dir)
+    path = config.campaign_dir / "config.toml"
+    source = path.read_text(encoding="utf-8") if path.exists() else ""
+    if backend is not None and backend != config.tts.backend:
+        if backend not in ("piper", "pocket"):
+            raise ConfigError(f"Unknown speech engine: {backend}")
+        # Keep each engine's assignments when the user switches back and forth.
+        previous = {"": config.tts.voice, **config.tts.voices}
+        source = _replace_table(source, f"tts.voice_presets.{config.tts.backend}", previous)
+        restored = dict(config.tts.voice_presets.get(backend, {}))
+        default = restored.pop("", "estelle" if backend == "pocket" else default_voice(config.language))
+        source = _set_table_value(source, "tts", "backend", backend)
+        source = _set_table_value(source, "tts", "voice", default)
+        source = _replace_table(source, "tts.voices", restored)
+    elif voice is not None:
+        if config.tts.backend == "pocket" and voice != "inherit":
+            from .pocket import POCKET_VOICES
+
+            if voice not in POCKET_VOICES:
+                raise ConfigError(f"Unknown Pocket voice: {voice}")
+        if stem is None:
+            if not voice.strip() or voice == "inherit":
+                raise ConfigError("Choose a default voice.")
+            source = _set_table_value(source, "tts", "voice", voice.strip())
+        else:
+            # Use only explicit entries, not Piper defaults inferred from languages.
+            values = dict(tomllib.loads(source).get("tts", {}).get("voices", {}))
+            if voice == "inherit":
+                values.pop(stem, None)
+            else:
+                values[stem] = voice.strip()
+            source = _replace_table(source, "tts.voices", values)
     tomllib.loads(source)
     path.write_text(source, encoding="utf-8")

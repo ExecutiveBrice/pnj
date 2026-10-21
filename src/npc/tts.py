@@ -1,4 +1,4 @@
-"""Local text-to-speech via Piper."""
+"""Local speech engines and their shared, campaign-scoped factory."""
 
 from __future__ import annotations
 
@@ -17,6 +17,58 @@ from .audio.player import AudioPlayer
 class Speaker(Protocol):
     def say(self, text: str) -> None: ...
     def stop(self) -> None: ...
+    def say_stream(self, sentences: Iterable[str]) -> tuple[list[str], bool]: ...
+
+
+class SpeakerFactory:
+    """Share one audio device and, for Pocket, one CPU model across characters."""
+
+    def __init__(self, config, *, on_audio=None, local_playback=True):
+        self.config = config
+        self.player = AudioPlayer()
+        self.on_audio = on_audio
+        self.local_playback = local_playback
+        self._speakers = {}
+
+    def __call__(self, resource):
+        key = str(resource)
+        if key not in self._speakers:
+            options = dict(on_audio=self.on_audio, local_playback=self.local_playback)
+            if self.config.backend == "pocket":
+                from .pocket import PocketSpeaker, get_runtime
+
+                self._speakers[key] = PocketSpeaker(
+                    get_runtime(self.config.model), key, self.player, **options)
+            else:
+                self._speakers[key] = PiperSpeaker(Path(resource), player=self.player, **options)
+        self._speakers[key].local_playback = self.local_playback
+        return self._speakers[key]
+
+    def default(self):
+        return self(self.config.voice_resource_for(self.config.voice))
+
+    def set_local_playback(self, enabled: bool) -> None:
+        """Update already selected/preloaded voices as well as future speakers."""
+        self.local_playback = enabled
+        for speaker in self._speakers.values():
+            speaker.local_playback = enabled
+
+    def preload(self, report=lambda message: None, *, warm=True):
+        if self.config.backend != "pocket":
+            return
+        from .pocket import get_runtime
+
+        report("Chargement de Pocket TTS sur CPU…")
+        self.default()  # an unavailable default must be reported as a TTS failure
+        for voice in sorted(set(self.config.voices.values()) - {self.config.voice}):
+            try:
+                report(f"Préparation de la voix {voice}…")
+                self(voice)
+            except Exception as exc:
+                report(f"Voix {voice} indisponible, utilisation de la voix par défaut : {exc}")
+        if warm:
+            report("Préchauffage silencieux de la voix…")
+            get_runtime(self.config.model).warm_up(self.config.voice)
 
 
 def download_hint(voice: str, voices_dir: Path) -> str:
@@ -29,13 +81,15 @@ def download_hint(voice: str, voices_dir: Path) -> str:
 
 class PiperSpeaker:
     def __init__(self, voice_path: Path, player: AudioPlayer | None = None, *,
-                 on_audio: Callable[[np.ndarray, int], None] | None = None):
+                 on_audio: Callable[[np.ndarray, int], None] | None = None,
+                 local_playback: bool = True):
         from piper import PiperVoice
 
         self._voice = PiperVoice.load(str(voice_path))
         self._player = player or AudioPlayer()
         self._cancel = threading.Event()
         self.on_audio = on_audio
+        self.local_playback = local_playback
 
     def synthesize(self, text: str) -> tuple[np.ndarray, int]:
         chunks = []
@@ -56,10 +110,10 @@ class PiperSpeaker:
             self._play(samples, sample_rate)
 
     def _play(self, samples: np.ndarray, sample_rate: int) -> None:
-        """Observe only audio that starts playback, after dialogue sanitization.
+        """Publish sanitized audio and optionally play it on the PC.
 
         Observers must enqueue and return promptly. Their failures cannot affect
-        local playback; synthesize() and Speaker.say() keep their old contracts.
+        synthesis or playback; remote-only output uses the same PCM once.
         """
         observer = getattr(self, "on_audio", None)
         if observer is not None:
@@ -67,7 +121,8 @@ class PiperSpeaker:
                 observer(samples, sample_rate)
             except Exception:
                 pass
-        self._player.play(samples, sample_rate)
+        if self.local_playback:
+            self._player.play(samples, sample_rate)
 
     def say_stream(self, sentences: Iterable[str]) -> tuple[list[str], bool]:
         """Synthesize and play sentence-by-sentence: synthesis (the caller's

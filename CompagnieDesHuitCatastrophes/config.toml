@@ -1,0 +1,68 @@
+# Configuration propre à cette campagne ; français et voix Pocket.
+language = "fr"
+history_limit = 30
+checkpoint_every_turns = 20
+
+[llm]
+backend = "ollama"
+model = "qwen2.5:7b-instruct"
+host = "http://localhost:11434"
+stream = true
+num_ctx = 8192
+
+[stt]
+model = "small"
+language = "fr"
+device = "auto"
+
+[tts]
+backend = "pocket"
+model = "french"
+voice = "estelle"
+
+# Les mêmes timbres sont réutilisés entre zones ; les fiches distinguent
+# registre, vocabulaire, politesse, cadence et réactions de chaque PNJ.
+[tts.voices]
+character = "jean"
+grum = "javert"
+pincefonds = "jean"
+berta = "anna"
+zib = "estelle"
+gertrude = "anna"
+barnabe = "jean"
+huguette = "estelle"
+cocoric = "marius"
+feuillu = "javert"
+sylvandre = "jean"
+myrtille = "anna"
+noisette = "marius"
+glougloutte = "anna"
+ogredou = "javert"
+mamie-vase = "anna"
+croa = "marius"
+brulot = "marius"
+frida = "anna"
+pipo = "jean"
+biquette = "estelle"
+paille-au-nez = "marius"
+gaspard = "javert"
+corbin = "jean"
+melisse = "anna"
+azram = "marius"
+saida = "estelle"
+hakim = "jean"
+flocon = "javert"
+barbe-de-sel = "javert"
+pincemaille = "jean"
+lila = "estelle"
+mouette = "marius"
+
+[hotkey]
+key = "KEY_SPACE"
+mode = "hold"
+
+[mobile]
+enabled = false
+local_playback = true
+listen = "0.0.0.0"
+port = 8766

@@ -546,6 +546,123 @@ def test_stream_false_in_config_uses_plain_chat(config):
     assert len(app.llm.calls) == 1
 
 
+_ARCH_REFUSAL = "Je vous comprends bien, mais je ne peux pas vous permettre d'approcher de l'arche."
+_HUG_REPLY = "Je préfère garder mes distances, mais je vous remercie de demander."
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_repeated_refusal_is_retried_before_audio_display_or_secret_handling(config, streaming):
+    config.language = "fr-BE"
+    llm = StreamingFakeLLM(chunks=(_ARCH_REFUSAL[:24], _ARCH_REFUSAL[24:],
+                                   " [CHECK:teleporter-key]"))
+    llm.replies = [_HUG_REPLY] if streaming else [
+        _ARCH_REFUSAL + " [CHECK:teleporter-key]", _HUG_REPLY]
+    speaker = StreamingFakeSpeaker() if streaming else FakeSpeaker()
+    events = []
+    app = NPCApp(config, llm=llm, speaker=speaker, on_event=events.append)
+    app.events = events
+    app.active.history.add_npc(_ARCH_REFUSAL)
+    app.start()
+    try:
+        app.handle_line("/say Et à toi, je peux te faire un câlin ?")
+        drain(app)
+        assert speaker.spoken == [_HUG_REPLY]
+        assert of_type(app, NpcReplied)[-1].text == _HUG_REPLY
+        assert "arche" not in "".join(e.text for e in of_type(app, NpcReplyChunk))
+        assert app.active.pending_secret is None
+        assert "câlin" in llm.calls[-1][1][-1]["content"]
+        assert _ARCH_REFUSAL not in app.transcript.read()
+        assert app.state is State.IDLE
+    finally:
+        app._queue.put(None)
+
+
+def test_repetition_retry_is_bounded_and_does_not_record_another_bad_reply(app):
+    app.config.language = "fr"
+    app.active.history.add_npc(_ARCH_REFUSAL)
+    app.llm.reply = _ARCH_REFUSAL
+    app.handle_line("/say Et à toi, je peux te faire un câlin ?")
+    drain(app)
+    assert len(app.llm.calls) == 2
+    assert app.speaker.spoken == []
+    assert of_type(app, NpcReplied) == []
+    assert "repeated" in of_type(app, ErrorOccurred)[-1].message
+    assert app.state is State.IDLE
+
+
+def test_player_can_explicitly_request_an_exact_repeat(app):
+    app.config.language = "fr"
+    app.active.history.add_npc(_ARCH_REFUSAL)
+    app.llm.reply = _ARCH_REFUSAL
+    app.handle_line("/say Répétez, s'il vous plaît.")
+    drain(app)
+    assert app.speaker.spoken == [_ARCH_REFUSAL]
+    assert len(app.llm.calls) == 1
+
+
+def test_shared_opening_that_diverges_keeps_streaming_without_retry(stream_app):
+    stream_app.config.language = "fr"
+    stream_app.active.history.add_npc("Non. Le monolithe est une relique sacrée.")
+    stream_app.llm.chunks = ("Non. ", "Je préfère garder mes distances.")
+    stream_app.handle_line("/say Et à toi, je peux te faire un câlin ?")
+    drain(stream_app)
+    assert stream_app.speaker.spoken == ["Non.", "Je préfère garder mes distances."]
+    assert stream_app.llm.calls == []
+
+
+def test_rejected_language_attempt_cannot_request_a_secret(app):
+    app.config.language = "fr"
+    app.llm.replies = [
+        "Give me a moment, I need to think. [CHECK:teleporter-key]",
+        "Je préfère que vous gardiez vos mains pour vous.",
+    ]
+    app.handle_line("/say Je peux toucher le monolithe ?")
+    drain(app)
+    assert app.active.pending_secret is None
+    assert app.speaker.spoken == ["Je préfère que vous gardiez vos mains pour vous."]
+
+
+@pytest.mark.parametrize("selected", [None, "teleporter-key"])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_separate_secret_routing_controls_requests_without_exposing_bodies(config, selected,
+                                                                          streaming):
+    class RoutingLLM(StreamingFakeLLM):
+        def select_secret_topic(self, line, topics, context):
+            self.routing_input = (line, topics, context)
+            return selected
+
+        def chat_stream(self, system, messages):
+            self.writer_system = system
+            yield from super().chat_stream(system, messages)
+
+    llm = RoutingLLM()
+    # Normal dialogue can emit a spurious marker; a real secret request
+    # can omit its marker. Neither mistake controls the GM gate anymore.
+    llm.reply = ("I need a moment to think." if selected
+                 else "Please leave the stone alone. [CHECK:teleporter-key]")
+    llm.chunks = (llm.reply,)
+    config.llm.stream = streaming
+    events = []
+    app = NPCApp(config, llm=llm, speaker=StreamingFakeSpeaker(), on_event=events.append)
+    app.events = events
+    app.start()
+    try:
+        app.handle_line("/say Where is the key?" if selected else "/say Can I touch the monolith?")
+        drain(app)
+        assert app.active.pending_secret == selected
+        system = llm.writer_system if streaming else llm.calls[-1][0]
+        if selected:
+            assert "Locked knowledge" in system
+            assert "- topic (erased-discovery)" not in system
+        else:
+            assert "Locked knowledge" not in system
+        for secret in app.active.secrets.locked():
+            assert secret.body not in system
+        assert all(isinstance(hint, str) for hint in llm.routing_input[1].values())
+    finally:
+        app._queue.put(None)
+
+
 def test_checkpoint_every_n_turns(config):
     config.checkpoint_every_turns = 2
     events = []
@@ -628,6 +745,60 @@ def test_yes_delivers_the_secret_and_persists(app, campaign):
     assert ("GM", "revealed the secret (teleporter-key): "
             "the location of a working teleporter key — only for someone "
             "with her full trust") in app.active.turns
+
+
+@pytest.mark.parametrize("language", ["en", "fr-BE"])
+def test_restart_preserves_approved_secrets_and_announces_them_only_to_gm(config, language):
+    from npc.session.secrets import SecretsSheet
+
+    config.language = language
+    sheet = SecretsSheet.load(config.campaign_dir / "secrets.md")
+    key = sheet.get("teleporter-key")
+    key.revealed = "session 2"
+    sheet.save(config.campaign_dir / "secrets.md")
+    events = []
+    restarted = NPCApp(config, llm=FakeLLM(), on_event=events.append)
+    notices = [e for e in events if isinstance(e, SecretNote)]
+    assert len(notices) == 1
+    assert notices[0].dm_only
+    assert "teleporter-key" in notices[0].message and "session 2" in notices[0].message
+    assert key.body not in notices[0].message
+    assert restarted.active.secrets.get(key.id).revealed == "session 2"
+    assert key.body in restarted._system_prompt(restarted.active)
+    restarted._load_roster()
+    assert [e for e in events if isinstance(e, SecretNote)] == notices
+
+
+def test_key_rumour_and_routed_question_never_approve_a_locked_secret(config):
+    from npc.session.secrets import SecretsSheet
+
+    class RoutingLLM(FakeLLM):
+        def select_secret_topic(self, line, topics, context):
+            self.last_topics = topics
+            return "teleporter-key" if line.startswith("Where") else None
+
+    llm = RoutingLLM()
+    llm.replies = ["What have you heard?", "Tokk has a great deal to say.",
+                   "Tell me why you seek it."]
+    app = NPCApp(config, llm=llm, on_event=lambda e: None)
+    app.start()
+    try:
+        app.handle_line("/say I heard about a teleporter.")
+        app.handle_line("/say Yes, a key, Tokk told me about it.")
+        drain(app)
+        assert app.active.pending_secret is None
+        app.handle_line("/say Where is the key?")
+        drain(app)
+        assert app.active.pending_secret == "teleporter-key"
+        key = app.active.secrets.get("teleporter-key")
+        assert key.revealed is None
+        saved = SecretsSheet.load(config.campaign_dir / "secrets.md")
+        assert saved.get(key.id).revealed is None
+        assert llm.last_topics["teleporter-key"] == key.hint
+        assert all(key.body not in system for system, _ in llm.calls)
+        assert all(key.body not in m["content"] for _, messages in llm.calls for m in messages)
+    finally:
+        app.shutdown(summarize=False)
 
 
 def test_no_denies_for_the_session(app):

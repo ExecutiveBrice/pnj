@@ -17,7 +17,7 @@ from .config import Config
 from .session.history import ConversationHistory
 from .session.logbook import Logbook
 from .session.lore import LoreFile, load_lore
-from .session.secrets import SecretsSheet
+from .session.secrets import PendingDisclosure, SecretsSheet
 
 
 @dataclass(frozen=True)
@@ -81,6 +81,7 @@ class CharacterSlot:
     secrets: SecretsSheet = field(default_factory=SecretsSheet)
     secrets_error: str | None = None  # parse failure; the app surfaces it
     pending_secret: str | None = None  # id awaiting the GM's /yes or /no
+    pending_disclosure: PendingDisclosure | None = None
     denied_secrets: set[str] = field(default_factory=set)  # /no'd this session
     lore_dir: Path | None = None
     lore: list[LoreFile] = field(default_factory=list)

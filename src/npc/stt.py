@@ -1,7 +1,7 @@
 """Local speech-to-text via faster-whisper.
 
 GPU is used when available. CUDA runtime libraries can come from the optional
-`npc[cuda]` extra (nvidia-cublas-cu12 / nvidia-cudnn-cu12); if CUDA fails for
+`ttrpg-npc[cuda]` extra (nvidia-cublas-cu12 / nvidia-cudnn-cu12); if CUDA fails for
 any reason we fall back to CPU rather than crash mid-session.
 
 Whisper hallucinates on (near-)silence: it was trained on YouTube, so silence
@@ -17,6 +17,9 @@ import glob
 import logging
 import os
 import re
+import sys
+from importlib.metadata import PackageNotFoundError, distribution
+from pathlib import Path
 from typing import Protocol
 
 import numpy as np
@@ -74,8 +77,29 @@ def join_segments(segments) -> str:
     ).strip()
 
 
+# Keep Windows DLL search directories registered for lazy cuDNN loads.
+_CUDA_DLL_DIRS: dict[str, object] = {}
+
+
 def _preload_cuda_libs() -> None:
-    """Make pip-installed NVIDIA libs loadable without LD_LIBRARY_PATH."""
+    """Make pip-installed NVIDIA libraries loadable on Linux and Windows."""
+    if sys.platform == "win32":
+        for name in ("nvidia-cuda-nvrtc-cu12", "nvidia-cublas-cu12", "nvidia-cudnn-cu12"):
+            try:
+                package = distribution(name)
+            except PackageNotFoundError:
+                continue
+            directories = sorted({
+                str(Path(package.locate_file(file)).parent)
+                for file in package.files or () if str(file).lower().endswith(".dll")
+            })
+            for directory in directories:
+                if directory in _CUDA_DLL_DIRS or not Path(directory).is_dir():
+                    continue
+                _CUDA_DLL_DIRS[directory] = os.add_dll_directory(directory)
+                # CTranslate2 also uses native LoadLibrary, which searches PATH.
+                os.environ["PATH"] = directory + os.pathsep + os.environ.get("PATH", "")
+        return
     try:
         import nvidia.cublas.lib
         import nvidia.cudnn.lib
@@ -103,12 +127,13 @@ def _quiet_third_party_logs() -> None:
 class WhisperTranscriber:
     def __init__(self, model_size: str = "small", language: str = "auto",
                  device: str = "auto"):
+        if device in ("auto", "cuda"):
+            _preload_cuda_libs()
         from faster_whisper import WhisperModel
 
         _quiet_third_party_logs()
         self.language = None if language == "auto" else language
         if device == "auto":
-            _preload_cuda_libs()
             try:
                 self._model = WhisperModel(model_size, device="auto")
                 self._warm_up()

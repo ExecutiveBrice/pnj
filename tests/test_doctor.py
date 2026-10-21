@@ -1,12 +1,90 @@
 """doctor --fix: the interactive fixer loop (no network, no hardware)."""
 
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from npc.config import Config, TtsConfig
 from npc.doctor import CheckResult, apply_fixes, npc_voice_checks, whisper_detail
 from npc.tts import download_hint
+
+
+@pytest.fixture
+def setup_checks(config, monkeypatch):
+    from npc import doctor
+
+    monkeypatch.setattr("npc.llm.make_llm_client", lambda config: SimpleNamespace(
+        is_up=lambda: True, has_model=lambda: True))
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(
+        query_devices=lambda **kwargs: {"name": "test audio"}))
+    monkeypatch.setattr(doctor, "_whisper_cache_dir", lambda model: config.campaign_dir)
+    config.tts.voices_dir = str(config.campaign_dir / "voices")
+    config.tts.voice_path.parent.mkdir(parents=True, exist_ok=True)
+    config.tts.voice_path.touch()
+    return config
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+def test_unsupported_global_hotkey_is_informational(setup_checks, monkeypatch, platform):
+    from npc.doctor import print_report, run_checks
+
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr("npc.hotkey.keycode_from_name",
+                        lambda name: pytest.fail("unsupported hotkey must not be probed"))
+    checks = run_checks(setup_checks)
+    hotkey = next(c for c in checks if c.name.startswith("Push-to-talk"))
+    assert hotkey.ok and hotkey.skipped
+    assert "npc gui" in hotkey.detail
+    assert all(c.ok for c in checks)
+    output = []
+    assert print_report(checks, out=output.append)
+    assert any("[SKIP] Push-to-talk" in line for line in output)
+    assert not any("[FAIL]" in line or "fix:" in line for line in output)
+
+
+def test_desktop_checks_omit_hotkey(setup_checks, monkeypatch):
+    from npc.doctor import run_checks
+
+    monkeypatch.setattr("npc.hotkey.keycode_from_name",
+                        lambda name: pytest.fail("desktop must not probe hotkeys"))
+    assert not any(c.name.startswith("Push-to-talk")
+                   for c in run_checks(setup_checks, check_hotkey=False))
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_linux_still_checks_global_hotkey(setup_checks, monkeypatch, available):
+    from npc.doctor import run_checks
+    from npc.hotkey import HotkeyUnavailable
+
+    closed = []
+
+    def devices(*args):
+        if not available:
+            raise HotkeyUnavailable("no permission to read /dev/input devices")
+        return [SimpleNamespace(name="test keyboard", close=lambda: closed.append(True))]
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("npc.hotkey.keycode_from_name", lambda name: 57)
+    monkeypatch.setattr("npc.hotkey.find_ptt_devices", devices)
+    hotkey = next(c for c in run_checks(setup_checks) if c.name.startswith("Push-to-talk"))
+    assert hotkey.ok == available
+    assert not hotkey.skipped
+    assert closed == ([True] if available else [])
+    if not available:
+        assert "usermod" in hotkey.fix
+
+
+def test_doctor_succeeds_when_only_global_hotkey_is_skipped(config, monkeypatch, capsys):
+    from npc.cli import main
+
+    monkeypatch.setattr("npc.doctor.run_checks", lambda *a, **kw: [
+        CheckResult("Push-to-talk (KEY_SPACE)", True, skipped=True, detail="use npc gui")])
+    assert main(["doctor", str(config.campaign_dir)]) == 0
+    output = capsys.readouterr().out
+    assert "[SKIP] Push-to-talk" in output
+    assert "All good" in output
+    assert "Fix the FAILs" not in output
 
 
 def test_apply_fixes_runs_only_confirmed_fixers():

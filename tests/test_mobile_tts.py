@@ -40,6 +40,17 @@ def test_observer_failure_cannot_break_local_audio():
     assert speaker._player.played == [3, 3]
 
 
+def test_client_only_output_publishes_once_without_pc_audio():
+    speaker = StubPiperSpeaker(RecordingPlayer())
+    speaker.local_playback = False
+    observed = []
+    speaker.on_audio = lambda samples, rate: observed.append((len(samples), rate))
+    speaker.say("Hello")
+    assert speaker.say_stream(iter(["one", "four"])) == (["one", "four"], False)
+    assert observed == [(5, 22050), (3, 22050), (4, 22050)]
+    assert speaker._player.played == []
+
+
 def test_cancelled_sentences_are_not_broadcast():
     playing = threading.Event()
 

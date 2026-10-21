@@ -205,16 +205,19 @@ def cmd_transcribe(args) -> int:
 
 
 def cmd_say(args) -> int:
-    from .tts import PiperSpeaker, download_hint
+    from .tts import SpeakerFactory, download_hint
 
     config = load_config(Path(args.campaign))
-    voice_path = config.tts.voice_path
-    if not voice_path.exists():
-        print(f"voice not found: {voice_path}", file=sys.stderr)
-        print(f"download it: {download_hint(config.tts.voice, voice_path.parent)}",
+    if config.tts.backend == "piper" and not config.tts.voice_path.exists():
+        print(f"voice not found: {config.tts.voice_path}", file=sys.stderr)
+        print(f"download it: {download_hint(config.tts.voice, config.tts.voice_path.parent)}",
               file=sys.stderr)
         return 1
-    PiperSpeaker(voice_path).say(args.text)
+    try:
+        SpeakerFactory(config.tts).default().say(args.text)
+    except Exception as exc:
+        print(f"Speech unavailable: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -259,13 +262,17 @@ def cmd_run(args) -> int:
             mobile.publish_audio(samples, sample_rate)
 
     transcriber = recorder = None
-    if not ({"Whisper model", "Audio input", "Push-to-talk"} & failed_soft):
-        from .audio.recorder import PushToTalkRecorder, VadRecorder
+    local_voice = (sys.platform == "linux"
+                   and not ({"Whisper model", "Audio input", "Push-to-talk"} & failed_soft))
+    if "Whisper model" not in failed_soft and (mobile_enabled or local_voice):
         from .stt import WhisperTranscriber
 
         print("Loading whisper model…")
         transcriber = WhisperTranscriber(config.stt.model, config.stt.language,
                                          config.stt.device)
+    if local_voice:
+        from .audio.recorder import PushToTalkRecorder, VadRecorder
+
         if config.hotkey.mode == "tap":
             recorder = VadRecorder(threshold_db=config.stt.silence_threshold_db,
                                    silence_seconds=config.stt.vad_silence_seconds,
@@ -273,22 +280,26 @@ def cmd_run(args) -> int:
         else:
             recorder = PushToTalkRecorder()
     else:
-        print("! voice input disabled this session (see FAILs above); /say still works")
+        if sys.platform != "linux":
+            print("Local microphone: use `npc gui` and its recording button; "
+                  "/say and mobile voice input remain available")
+        else:
+            print("! local voice input disabled this session (see FAILs above); /say still works")
 
     speaker = make_speaker = None
-    if "Piper voice" not in failed_soft and "Audio output" not in failed_soft:
-        from .audio.player import AudioPlayer
-        from .tts import PiperSpeaker
+    audio_required = not (mobile_enabled and not config.mobile.local_playback)
+    tts_failed = {"Piper voice", "Pocket TTS"} & failed_soft
+    if not tts_failed and (not audio_required or "Audio output" not in failed_soft):
+        from .tts import SpeakerFactory
 
-        # ONE AudioPlayer for every voice: its persistent output stream is
-        # what keeps the ALSA PipeWire plugin's close bug out of sessions
-        player = AudioPlayer()
-        speaker = PiperSpeaker(config.tts.voice_path, player=player,
-                               on_audio=on_audio if mobile_enabled else None)
-
-        def make_speaker(voice_path, _player=player):
-            return PiperSpeaker(voice_path, player=_player,
-                                on_audio=on_audio if mobile_enabled else None)
+        try:
+            make_speaker = SpeakerFactory(config.tts,
+                                         on_audio=on_audio if mobile_enabled else None)
+            make_speaker.preload(print)
+            speaker = make_speaker.default()
+        except Exception as exc:
+            speaker = make_speaker = None
+            print(f"! spoken replies disabled: {exc}")
     else:
         print("! spoken replies disabled this session (see FAILs above)")
 
@@ -300,7 +311,7 @@ def cmd_run(args) -> int:
         if args.timings and isinstance(event, TurnCompleted):
             print(format_timings(event))
         if mobile is not None:
-            mobile.publish(event)  # MobileServer enforces its own player-only gate
+            mobile.publish(event)  # MobileServer gates player and GM payloads separately
         if overlay is None or type(event).dm_only:
             return  # dm_only (secret ids/hints) never reaches the websocket
         if lan_mode and not type(event).table_safe:
@@ -335,8 +346,12 @@ def cmd_run(args) -> int:
         try:
             mobile = MobileServer(app, config.mobile.port, config.mobile.listen)
             mobile.start()
+            if speaker is not None:
+                make_speaker.set_local_playback(config.mobile.local_playback)
             for line in mobile_announcement(config.mobile.listen, mobile.port):
                 print(line)
+            if speaker is not None and not config.mobile.local_playback:
+                print("Voice output: connected clients only (PC speakers muted)")
         except Exception as e:
             if mobile is not None:
                 mobile.stop()

@@ -1,0 +1,293 @@
+"""The real mobile companion's disclosure contract, using localhost sockets."""
+
+import json
+
+import pytest
+from websockets.sync.client import connect
+
+from npc.app import NPCApp
+from npc.events import SecretDisclosureRequested, SecretDisclosureResolved, SecretDisclosuresChanged
+from npc.mobile_protocol import event_to_message, gm_event_to_message
+from npc.mobile_server import MobileServer
+from npc.session.secrets import SecretsSheet
+
+from test_app_pipeline import FakeLLM, FakeSpeaker, drain
+
+
+@pytest.fixture
+def server(config, campaign):
+    (campaign / "characters").mkdir()
+    (campaign / "characters" / "smith.md").write_text("# Smith\nA smith.\n")
+    (campaign / "secrets").mkdir()
+    (campaign / "secrets" / "smith.md").write_text(
+        "## teleporter-key\nhint: the smith's key\n\nThe smith hid it in his forge.\n")
+    server = None
+
+    def on_event(event):
+        if server is not None:
+            server.publish(event)
+
+    app = NPCApp(config, llm=FakeLLM(), speaker=FakeSpeaker(), on_event=on_event)
+    app.start()
+    server = MobileServer(app, port=0)
+    server.start()
+    yield server
+    app.shutdown(summarize=False)
+    server.stop()
+
+
+def client(server, **kwargs):
+    return connect(f"ws://127.0.0.1:{server.port}/ws", **kwargs)
+
+
+def recv(ws):
+    return json.loads(ws.recv(timeout=2))
+
+
+def until(ws, kind):
+    for _ in range(50):
+        message = recv(ws)
+        if message["type"] == kind:
+            return message
+    pytest.fail(f"did not receive {kind}")
+
+
+def send(ws, **message):
+    ws.send(json.dumps(message))
+
+
+def snapshot(ws):
+    send(ws, type="status")
+    until(ws, "status")
+    return until(ws, "secret_disclosure_list")["requests"]
+
+
+def request(server, ws, context="Where is the key?"):
+    server.app.llm.reply = "Give me a moment. [CHECK:teleporter-key]"
+    send(ws, type="say", text=context)
+    proposal = until(ws, "secret_disclosure_requested")
+    until(ws, "state")  # speaking (non-streaming fake)
+    until(ws, "state")  # idle
+    return proposal
+
+
+def decide(ws, proposal, decision="approved"):
+    send(ws, type="resolve_secret_disclosure", request_id=proposal["request_id"], decision=decision)
+
+
+def prompts(app):
+    return "\n".join(system + "\n" + "\n".join(m["content"] for m in messages)
+                     for system, messages in app.llm.calls)
+
+
+def test_capability_snapshot_and_reconnect_match_mobile_contract(server):
+    with client(server) as ws:
+        assert recv(ws)["capabilities"]["secret_approval"] is True
+        proposal = request(server, ws)
+        secret = server.app.active.secrets.get("teleporter-key")
+        assert proposal == {"type": "secret_disclosure_requested",
+                            "request_id": proposal["request_id"],
+                            "npc": server.app.npc_name, "secret": secret.body,
+                            "context": "Where is the key?"}
+        expected = [{k: v for k, v in proposal.items() if k != "type"}]
+        assert snapshot(ws) == expected
+        assert secret.body not in prompts(server.app)
+        assert "CHECK" not in str(server.app.speaker.spoken)
+    with client(server) as reconnected:
+        assert recv(reconnected)["type"] == "hello"
+        assert snapshot(reconnected) == expected
+
+
+@pytest.mark.parametrize("decision", ["approved", "rejected"])
+def test_decision_broadcast_retry_and_conflict_do_not_repeat_delivery(server, decision):
+    with client(server) as first, client(server) as second:
+        recv(first)
+        recv(second)
+        proposal = request(server, first)
+        assert until(second, "secret_disclosure_requested") == proposal
+        server.app.llm.reply = "The key is hidden nearby."
+        decide(first, proposal, decision)
+        expected = {"type": "secret_disclosure_resolved", "request_id": proposal["request_id"],
+                    "decision": decision}
+        assert until(first, "secret_disclosure_resolved") == expected
+        assert until(second, "secret_disclosure_resolved") == expected
+        drain(server.app)
+        calls = len(server.app.llm.calls)
+        assert calls == (2 if decision == "approved" else 1)
+        assert snapshot(first) == []
+        decide(second, proposal, decision)
+        assert until(second, "secret_disclosure_resolved") == expected
+        decide(first, proposal, "rejected" if decision == "approved" else "approved")
+        assert until(first, "secret_disclosure_list")["requests"] == []
+        drain(server.app)
+        assert len(server.app.llm.calls) == calls
+        slot = server.app.active
+        saved = SecretsSheet.load(slot.secrets_path).get("teleporter-key")
+        assert bool(saved.revealed) == (decision == "approved")
+        assert ("teleporter-key" in slot.denied_secrets) == (decision == "rejected")
+        if decision == "approved":
+            assert saved.body in server.app.llm.calls[-1][0]
+        else:
+            assert saved.body not in prompts(server.app)
+
+
+@pytest.mark.parametrize("decision", ["approved", "rejected"])
+def test_decisions_target_original_npc_and_preserve_other_pending_requests(server, decision):
+    with client(server) as ws:
+        recv(ws)
+        original = server.app.active
+        first = request(server, ws)
+        send(ws, type="switch_npc", npc="smith")
+        until(ws, "npc_switched")
+        second = request(server, ws, "And your key?")
+        assert first["request_id"] != second["request_id"]
+        assert len(snapshot(ws)) == 2
+        server.app.llm.reply = "Here is what I know."
+        decide(ws, first, decision)
+        assert until(ws, "secret_disclosure_resolved")["decision"] == decision
+        drain(server.app)
+        assert bool(original.secrets.get("teleporter-key").revealed) == (decision == "approved")
+        assert not server.app.roster["smith"].secrets.get("teleporter-key").revealed
+        assert snapshot(ws) == [{k: v for k, v in second.items() if k != "type"}]
+        assert server.app.active is (original if decision == "approved"
+                                     else server.app.roster["smith"])
+        if decision == "rejected":
+            assert original.ooc_notes
+            assert not server.app.roster["smith"].ooc_notes
+
+
+@pytest.mark.parametrize("command,decision", [("/yes", "approved"), ("/no", "rejected"),
+                                              ("/reveal teleporter-key", "approved")])
+def test_cli_decisions_confirm_mobile_requests(server, command, decision):
+    with client(server) as ws:
+        recv(ws)
+        proposal = request(server, ws)
+        server.app.llm.reply = "Here is the key."
+        server.app.handle_line(command)
+        assert until(ws, "secret_disclosure_resolved") == {
+            "type": "secret_disclosure_resolved", "request_id": proposal["request_id"],
+            "decision": decision}
+        drain(server.app)
+        assert snapshot(ws) == []
+
+
+def test_later_invalidates_old_request_and_new_proposal_gets_new_identity(server):
+    with client(server) as ws:
+        recv(ws)
+        first = request(server, ws)
+        server.app.handle_line("/later")
+        assert until(ws, "secret_disclosure_list")["requests"] == []
+        second = request(server, ws)
+        assert first["request_id"] != second["request_id"]
+        decide(ws, first)
+        assert until(ws, "secret_disclosure_list")["requests"][0]["request_id"] == second["request_id"]
+        assert not server.app.active.secrets.get("teleporter-key").revealed
+
+
+@pytest.mark.parametrize("replacement", ["", "## teleporter-key\nhint: changed\n\nNew body.\n"])
+def test_reload_invalidates_deleted_or_edited_proposals(server, replacement):
+    with client(server) as ws:
+        recv(ws)
+        proposal = request(server, ws)
+        server.app.active.secrets_path.write_text(replacement, encoding="utf-8")
+        server.app.handle_line("/reload")
+        assert until(ws, "secret_disclosure_list")["requests"] == []
+        decide(ws, proposal)
+        assert until(ws, "secret_disclosure_list")["requests"] == []
+        drain(server.app)
+        assert len(server.app.llm.calls) == 1
+        assert not server.app.active.pending_secret
+        assert not server.app.active.secrets.revealed()
+
+
+def test_approval_is_not_confirmed_if_persistence_fails(server, monkeypatch):
+    with client(server) as ws:
+        recv(ws)
+        proposal = request(server, ws)
+        slot = server.app.active
+        events = []
+        on_event = server.app._on_event
+
+        def observe(event):
+            events.append(event)
+            on_event(event)
+
+        server.app._on_event = observe
+
+        def fail(path):
+            raise OSError("private path")
+
+        monkeypatch.setattr(slot.secrets, "save", fail)
+        decide(ws, proposal)
+        send(ws, type="status")
+        until(ws, "status")
+        # A status can overtake queued work; wait for that work before checking again.
+        until(ws, "secret_disclosure_list")
+        drain(server.app)
+        assert snapshot(ws)[0]["request_id"] == proposal["request_id"]
+        assert not slot.secrets.get("teleporter-key").revealed
+        assert len(server.app.llm.calls) == 1
+        assert not any(isinstance(e, SecretDisclosureResolved) for e in events)
+
+
+def test_concurrent_opposite_decisions_apply_only_one_outcome(server):
+    with client(server) as first, client(server) as second:
+        recv(first)
+        recv(second)
+        proposal = request(server, first)
+        until(second, "secret_disclosure_requested")
+        server.app.llm.reply = "Here is the key."
+        # Both sockets submit before either observes a confirmation.
+        decide(first, proposal, "approved")
+        decide(second, proposal, "rejected")
+        outcome = until(first, "secret_disclosure_resolved")
+        assert until(second, "secret_disclosure_resolved") == outcome
+        drain(server.app)
+        slot = server.app.active
+        approved = outcome["decision"] == "approved"
+        assert bool(slot.secrets.get("teleporter-key").revealed) == approved
+        assert ("teleporter-key" in slot.denied_secrets) != approved
+        assert len(server.app.llm.calls) == (2 if approved else 1)
+        assert snapshot(first) == []
+
+
+def test_player_connections_cannot_see_or_resolve_gm_disclosures(server):
+    server._authorize_gm = lambda req: req.headers.get("X-GM") == "yes"
+    with client(server, additional_headers={"X-GM": "yes"}) as gm, client(server) as player:
+        assert recv(gm)["capabilities"]["secret_approval"] is True
+        assert recv(player)["capabilities"]["secret_approval"] is False
+        proposal = request(server, gm)
+        # Drain all public messages up to a status barrier; no GM payload may cross.
+        send(player, type="status")
+        messages = []
+        while True:
+            message = recv(player)
+            messages.append(message)
+            if message["type"] == "status":
+                break
+        assert not any(m["type"].startswith("secret_") for m in messages)
+        assert proposal["secret"] not in json.dumps(messages)
+        decide(player, proposal)
+        assert until(player, "error")["message"] == "Secret approval is unavailable for this connection"
+        assert not server.app.active.secrets.get("teleporter-key").revealed
+
+
+@pytest.mark.parametrize("values", [
+    {}, {"request_id": "x", "decision": True}, {"request_id": [], "decision": "approved"},
+    {"request_id": "x", "decision": "later"}, {"request_id": " ", "decision": "approved"},
+])
+def test_invalid_decision_fields_return_error_and_keep_connection_usable(server, values):
+    with client(server) as ws:
+        recv(ws)
+        send(ws, type="resolve_secret_disclosure", **values)
+        assert until(ws, "error")["type"] == "error"
+        assert snapshot(ws) == []
+
+
+def test_new_gm_events_stay_out_of_player_serializer():
+    events = [SecretDisclosureRequested("id", "NPC", "body", "context"),
+              SecretDisclosureResolved("id", "approved"), SecretDisclosuresChanged()]
+    for event in events:
+        assert event.dm_only
+        assert event_to_message(event, "NPC") is None
+    assert gm_event_to_message(events[0])["secret"] == "body"

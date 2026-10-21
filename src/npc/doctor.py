@@ -23,6 +23,7 @@ class CheckResult:
     hard: bool = False  # hard failures prevent `npc run` from starting
     fixer: Callable[[], None] | None = None  # safe in-process fix (--fix); never sudo
     fix_label: str = ""  # human sentence for the [y/N] prompt
+    skipped: bool = False  # unsupported/irrelevant checks are informational, not failures
 
 
 def _whisper_cache_dir(model_size: str) -> Path:
@@ -107,21 +108,8 @@ def run_checks(config: Config, deep: bool = False, *,
         fix="npc doctor   # downloads it (needs internet once)",
     ))
 
-    # 4. Piper voice
-    voice_path = config.tts.voice_path
-
-    def fix_voice():
-        from piper.download_voices import download_voice
-
-        voice_path.parent.mkdir(parents=True, exist_ok=True)
-        download_voice(config.tts.voice, voice_path.parent)
-
-    checks.append(CheckResult(
-        f"Piper voice ({config.tts.voice})", voice_path.exists(), detail=str(voice_path),
-        fix=download_hint(config.tts.voice, voice_path.parent),
-        fixer=fix_voice,
-        fix_label=f"download the {config.tts.voice} voice (~60 MB)",
-    ))
+    # 4. Only check/download the selected speech engine.
+    checks.extend(tts_checks(config, deep))
     checks.extend(npc_voice_checks(config))
     checks.extend(npc_secrets_checks(config))
     checks.extend(npc_lore_checks(config))
@@ -146,6 +134,13 @@ def run_checks(config: Config, deep: bool = False, *,
     # 6. Push-to-talk key readable
     if not check_hotkey:
         return checks  # desktop microphone is controlled by an on-screen button
+    if sys.platform != "linux":
+        checks.append(CheckResult(
+            f"Push-to-talk ({config.hotkey.key})", True, skipped=True,
+            detail="global hotkey is Linux-only; use `npc gui` for the desktop "
+                   "recording button, /say for typed dialogue, or mobile voice input",
+        ))
+        return checks
     from .hotkey import HotkeyUnavailable, find_ptt_devices, keycode_from_name
 
     try:
@@ -164,6 +159,54 @@ def run_checks(config: Config, deep: bool = False, *,
         ))
 
     return checks
+
+
+def tts_checks(config: Config, deep: bool = False) -> list[CheckResult]:
+    if config.tts.backend == "pocket":
+        from importlib.util import find_spec
+
+        from .pocket import POCKET_VOICES
+
+        if find_spec("pocket_tts") is None:
+            return [CheckResult("Pocket TTS", False, detail="optional dependency missing",
+                                fix='uv sync --extra pocket   # or Lancer NPC.bat')]
+        if config.tts.voice not in POCKET_VOICES:
+            return [CheckResult("Pocket TTS", False, detail=f"unknown voice: {config.tts.voice}",
+                                fix=f"Choose one of: {', '.join(POCKET_VOICES)}")]
+        checks = [CheckResult("Pocket TTS", True,
+                              detail=f"CPU / {config.tts.model}; model prepared at session startup")]
+        if deep:
+            try:
+                from .pocket import get_runtime
+
+                runtime = get_runtime(config.tts.model)
+                runtime.prepare(config.tts.voice)
+                checks[0].detail = f"CPU / {config.tts.model}; model and default voice loaded"
+                for voice in sorted(set(config.tts.voices.values()) - {config.tts.voice}):
+                    try:
+                        runtime.prepare(voice)
+                        checks.append(CheckResult(f"NPC voice ({voice})", True, detail="Pocket ready"))
+                    except Exception as exc:
+                        checks.append(CheckResult(f"NPC voice ({voice})", False, detail=str(exc)))
+            except Exception as exc:
+                checks[0] = CheckResult("Pocket TTS", False, detail=str(exc),
+                                        fix="Check internet for the first model/voice download, then retry.")
+        return checks
+
+    voice_path = config.tts.voice_path
+
+    def fix_voice():
+        from piper.download_voices import download_voice
+
+        voice_path.parent.mkdir(parents=True, exist_ok=True)
+        download_voice(config.tts.voice, voice_path.parent)
+
+    return [CheckResult(
+        f"Piper voice ({config.tts.voice})", voice_path.exists(), detail=str(voice_path),
+        fix=download_hint(config.tts.voice, voice_path.parent),
+        fixer=fix_voice,
+        fix_label=f"download the {config.tts.voice} voice (~60 MB)",
+    )]
 
 
 def npc_voice_checks(config: Config) -> list[CheckResult]:
@@ -185,6 +228,13 @@ def npc_voice_checks(config: Config) -> list[CheckResult]:
                 fix="rename the [tts.voices] key or the character file",
             ))
     for voice in sorted(set(config.tts.voices.values()) - {config.tts.voice}):
+        if config.tts.backend == "pocket":
+            from .pocket import POCKET_VOICES
+
+            checks.append(CheckResult(f"NPC voice ({voice})", voice in POCKET_VOICES,
+                                      detail="Pocket predefined voice",
+                                      fix=f"Choose one of: {', '.join(POCKET_VOICES)}"))
+            continue
         path = config.tts.voice_path_for(voice)
 
         def fix_npc_voice(voice=voice, path=path):
@@ -319,10 +369,10 @@ def apply_fixes(checks: list[CheckResult], ask=input, out=print) -> bool:
 
 
 def print_report(checks: list[CheckResult], out=print) -> bool:
-    """Prints PASS/FAIL lines; returns True if no hard check failed."""
+    """Prints PASS/FAIL/SKIP lines; returns True if no hard check failed."""
     ok = True
     for c in checks:
-        mark = "PASS" if c.ok else "FAIL"
+        mark = "SKIP" if c.skipped else ("PASS" if c.ok else "FAIL")
         out(f"  [{mark}] {c.name}" + (f" — {c.detail}" if c.detail else ""))
         if not c.ok:
             if c.fix:

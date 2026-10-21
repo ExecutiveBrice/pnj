@@ -1,9 +1,0 @@
-# Exemple de la Lanterne rouillée — tous les paramètres sont facultatifs ;
-# les valeurs par défaut figurent dans le modèle généré. Décommentez pour essayer.
-
-[llm]
-# model = "qwen2.5:7b-instruct"
-# num_ctx = 8192                    # marge pour le fichier de connaissances
-
-[overlay]
-# enabled = true                    # affichage de table sur http://127.0.0.1:8765

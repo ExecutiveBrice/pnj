@@ -1,7 +1,8 @@
-"""Version 1 player protocol. Explicit payloads prevent accidental field leaks.
+"""Version 1 mobile protocol. Explicit payloads prevent accidental field leaks.
 
 The overlay's class-name/asdict wire format remains independent and unchanged.
-New mobile events must pass BOTH exposure flags and this allowlist.
+Player events must pass BOTH exposure flags and their allowlist. The separate
+GM allowlist is used only for connections authorized by MobileServer.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from .events import (
     PlayerSpoke,
     RecordingDiscarded,
     RecordingStarted,
+    SecretDisclosureRequested,
+    SecretDisclosureResolved,
     SessionEnding,
     StateChanged,
     VoiceUnavailable,
@@ -28,6 +31,17 @@ PROTOCOL_VERSION = 1
 
 def encode(message: dict) -> str:
     return json.dumps(message, ensure_ascii=False)
+
+
+def gm_event_to_message(event: Event) -> dict | None:
+    """Separate allowlist for explicitly authorized mobile GM connections."""
+    if type(event) is SecretDisclosureRequested:
+        return {"type": "secret_disclosure_requested", "request_id": event.request_id,
+                "npc": event.npc, "secret": event.secret, "context": event.context}
+    if type(event) is SecretDisclosureResolved:
+        return {"type": "secret_disclosure_resolved", "request_id": event.request_id,
+                "decision": event.decision}
+    return None
 
 
 def event_to_message(event: Event, npc: str) -> dict | None:

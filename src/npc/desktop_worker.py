@@ -63,17 +63,15 @@ def build_app(config, emit, *, microphone=True):
             recorder = PushToTalkRecorder()
         except Exception as exc:
             emit(kind="log", text=f"Micro indisponible, la saisie reste active : {exc}")
-    if not {"Piper voice", "Audio output", "Audio subsystem"} & failed:
+    if not {"Piper voice", "Pocket TTS", "Audio output", "Audio subsystem"} & failed:
         try:
-            from .audio.player import AudioPlayer
-            from .tts import PiperSpeaker
+            from .tts import SpeakerFactory
 
-            player = AudioPlayer()
-            speaker = PiperSpeaker(config.tts.voice_path, player=player)
-
-            def make_speaker(path):
-                return PiperSpeaker(path, player=player)
+            make_speaker = SpeakerFactory(config.tts)
+            make_speaker.preload(lambda text: emit(kind="log", text=text))
+            speaker = make_speaker.default()
         except Exception as exc:
+            speaker = make_speaker = None
             emit(kind="log", text=f"Voix indisponible, les réponses restent affichées : {exc}")
 
     def on_event(event):
@@ -134,6 +132,7 @@ def main(argv=None) -> int:
     parser.add_argument("campaign", type=Path)
     parser.add_argument("--prepare", action="store_true")
     parser.add_argument("--no-microphone", action="store_true")
+    parser.add_argument("--test-voice", metavar="VOICE")
     args = parser.parse_args(argv)
     output = sys.stdout
     lock = threading.Lock()
@@ -147,6 +146,19 @@ def main(argv=None) -> int:
     with contextlib.redirect_stdout(sys.stderr):
         try:
             config = load_config(args.campaign)
+            if args.test_voice:
+                from .tts import SpeakerFactory
+
+                factory = SpeakerFactory(config.tts)
+                emit(kind="log", text=f"Préparation et écoute de la voix {args.test_voice}…")
+                french = (config.tts.model.startswith("french") if config.tts.backend == "pocket"
+                          else config.language.startswith("fr"))
+                factory(config.tts.voice_resource_for(args.test_voice)).say(
+                    "Bonjour, voyageurs. Installez-vous près du feu. Que puis-je faire pour vous ?"
+                    if french else
+                    "Welcome, travellers. Come and sit by the fire.")
+                emit(kind="log", text="Écoute terminée.")
+                return 0
             if args.prepare:
                 return prepare_models(config, emit)
             app = build_app(config, emit, microphone=not args.no_microphone)

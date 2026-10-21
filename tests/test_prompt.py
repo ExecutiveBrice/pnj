@@ -1,6 +1,13 @@
 import pytest
 
-from npc.session.prompt import build_system_prompt, extract_dialogue, looks_foreign
+from npc.session.prompt import (
+    asks_to_repeat,
+    build_system_prompt,
+    extract_dialogue,
+    looks_foreign,
+    reply_may_repeat,
+    reply_repeats,
+)
 from npc.session.secrets import Secret, SecretsSheet
 
 
@@ -181,3 +188,55 @@ def test_french_variants_replace_english_rule(language, regional):
     assert "stereotypes" in prompt
     assert not looks_foreign("Oui, je vous écoute. Que désirez-vous ?", language)
     assert looks_foreign("You are welcome, my friend.", language)
+
+
+@pytest.mark.parametrize("language", ["fr", "fr-BE", "fr-CH", "fr-CA"])
+def test_french_secret_examples_are_localized_without_exposing_locked_bodies(language):
+    prompt = build_system_prompt("CHARSHEET", "", "", [], secrets=sheet(), language=language)
+    assert "Give me a moment" not in prompt
+    assert "[CHECK:duke-tomb]" in prompt
+    assert "salt vault" not in prompt
+    assert "Alderman Voss." in prompt  # previously approved knowledge stays available
+
+
+@pytest.mark.parametrize("text", [
+    "Hm. Give me a moment — que cela ne soit pas un sujet que je discute.",
+    "Give me a moment, je vous répondrai ensuite.",
+])
+def test_english_stalling_in_mixed_french_is_detected(text):
+    assert looks_foreign(text, "fr-BE")
+
+
+def test_french_quoted_dialogue_is_kept_without_the_surrounding_narration():
+    raw = ('Vess vous observe un instant. « Pourquoi toucher le monolithe ? » '
+           'dit-elle calmement. « Je préfère comprendre avant d\'expérimenter. »')
+    assert extract_dialogue(raw) == (
+        "Pourquoi toucher le monolithe? Je préfère comprendre avant d'expérimenter.")
+
+
+REFUSAL = "Je vous comprends bien, mais je ne peux pas vous permettre d'approcher de l'arche."
+
+
+@pytest.mark.parametrize("reply, expected", [
+    (REFUSAL, True),
+    (REFUSAL.upper().replace(",", ""), True),
+    ("Je vous comprends bien, mais je peux vous permettre d'approcher de l'arche.", False),
+    ("Je préfère garder mes distances, mais je vous remercie de demander.", False),
+    ("Non.", False),
+])
+def test_substantive_repetition_ignores_punctuation_but_preserves_meaning(reply, expected):
+    history = [{"role": "assistant", "content": REFUSAL}]
+    assert reply_repeats(reply, history) is expected
+
+
+def test_copied_opening_can_diverge_into_a_new_streamed_reply():
+    history = [{"role": "assistant", "content": "Non. Le monolithe est une relique sacrée."}]
+    assert reply_may_repeat("Non.", history)
+    assert reply_may_repeat("Non. Le monolithe est une relique sacrée.", history)
+    assert not reply_may_repeat("Non. Je préfère garder mes distances.", history)
+    assert not reply_repeats("Non.", history)
+
+
+@pytest.mark.parametrize("text", ["Répétez, s'il vous plaît.", "Tu peux répéter ?", "Repeat that."])
+def test_explicit_requests_to_repeat_are_recognized(text):
+    assert asks_to_repeat(text)

@@ -26,25 +26,29 @@ class DesktopProcess:
     def running(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
-    def start(self, campaign: Path, *, prepare: bool = False, microphone: bool = True):
+    def start(self, campaign: Path, *, prepare: bool = False, microphone: bool = True,
+              test_voice: str | None = None):
         if self.process is not None:
             raise RuntimeError("La session précédente doit être terminée avant de redémarrer.")
         executable = Path(sys.executable)
         # GUI entry points on Windows use pythonw, whose stdio is disabled.
         if executable.name.lower() == "pythonw.exe":
             executable = executable.with_name("python.exe")
-        command = [str(executable), "-u", "-m", "npc.desktop_worker", str(campaign.resolve())]
+        command = [str(executable), "-X", "utf8", "-u", "-m", "npc.desktop_worker", str(campaign.resolve())]
         if prepare:
             command.append("--prepare")
         if not microphone:
             command.append("--no-microphone")
+        if test_voice is not None:
+            command.extend(("--test-voice", test_voice))
         options = {}
         if sys.platform == "win32":
             options["creationflags"] = subprocess.CREATE_NO_WINDOW
         self.process = subprocess.Popen(
             command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", bufsize=1,
-            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"},
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1",
+                 "PYTHONUTF8": "1"},
             **options,
         )
         threading.Thread(target=self._read, args=(self.process,), daemon=True).start()

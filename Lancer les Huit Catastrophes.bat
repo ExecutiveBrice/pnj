@@ -11,5 +11,5 @@ if errorlevel 1 (
 set "NPC_UV_EXTRA="
 nvidia-smi --query-gpu=name --format=csv,noheader >nul 2>nul
 if not errorlevel 1 set "NPC_UV_EXTRA=--extra cuda"
-uv run --python 3.12 --locked --extra pocket %NPC_UV_EXTRA% npc gui "%~dp0CompagnieDesHuitCatastrophes"
+uv run --python 3.12 --locked --extra pocket --extra qwen %NPC_UV_EXTRA% npc gui "%~dp0CompagnieDesHuitCatastrophes"
 if errorlevel 1 pause

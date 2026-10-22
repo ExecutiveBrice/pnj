@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#162b28">
+  <title>Écho · Voix & histoires</title>
+  <style>
+    :root { color-scheme: light; font: 16px/1.55 system-ui, sans-serif; color: #172c28; background: #f5f3ed; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { background: #162b28; color: #faf8ef; padding: 26px max(22px, calc((100vw - 760px)/2)); }
+    .brand { font: 32px Georgia, serif; letter-spacing: .03em; }
+    header p { margin: 6px 0 14px; color: #ccd8cc; }
+    #connection { font-size: 13px; padding: 5px 10px; border: 1px solid #667b72; border-radius: 20px; display: inline-block; }
+    main { max-width: 800px; margin: auto; padding: 24px 20px 60px; }
+    h1, h2, h3 { font-family: Georgia, serif; font-weight: 400; line-height: 1.2; }
+    h1 { font-size: 30px; margin: 0 0 10px; }
+    h2 { font-size: 26px; }
+    h3 { font-size: 21px; margin: 0 0 10px; }
+    p { margin-top: 0; }
+    .muted, small { color: #53665d; }
+    nav { display: flex; gap: 8px; margin: 24px 0; }
+    button, select, input, textarea { font: inherit; }
+    button { border: 1px solid #c0cbc1; border-radius: 10px; padding: 12px 17px; cursor: pointer; background: #fffefa; color: #172c28; min-height: 48px; }
+    button[aria-pressed="true"], .primary { background: #254f43; color: #fffdf6; border-color: #254f43; }
+    button:disabled { opacity: .55; cursor: default; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #ba8e47; outline-offset: 3px; }
+    .card { background: #fffefa; border: 1px solid #d9dfd4; border-radius: 16px; padding: 22px; margin: 16px 0; }
+    label { display: block; font-weight: 600; margin: 16px 0 6px; }
+    input, textarea, select { display: block; width: 100%; padding: 12px; border: 1px solid #b8c7bd; border-radius: 8px; color: inherit; background: white; }
+    textarea { resize: vertical; min-height: 100px; }
+    .row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+    .row > div { flex: 1; min-width: 160px; }
+    .actions { margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap; }
+    #job { border-left: 4px solid #ba8e47; background: #f1e7d2; padding: 14px 16px; border-radius: 4px 10px 10px 4px; margin: 18px 0; }
+    #notice { padding: 12px; background: #eee7d7; border-radius: 8px; }
+    progress, audio { display: block; width: 100%; margin: 12px 0; }
+    .meta { font-size: 13px; color: #53665d; margin-bottom: 10px; }
+    .empty { padding: 20px 0; color: #53665d; }
+    details { margin-top: 12px; overflow-wrap: anywhere; }
+    details p { white-space: pre-wrap; margin-top: 12px; }
+    a { color: #254f43; }
+    [hidden] { display: none !important; }
+    @media (max-width: 480px) { main { padding: 20px 14px 45px; } .card { padding: 18px; } nav button { flex: 1; } }
+  </style>
+</head>
+<body>
+  <header><div class="brand">Écho</div><p>Donnez une voix à vos histoires.</p><span id="connection" role="status">Connexion…</span></header>
+  <main>
+    <h1>Le studio du conteur</h1>
+    <p class="muted">Décrivez une voix, écrivez un récit et retrouvez vos créations à l’écoute.</p>
+    <p id="notice" hidden></p>
+    <nav aria-label="Studio">
+      <button type="button" data-tab="stories" aria-pressed="true">Histoires</button>
+      <button type="button" data-tab="voices" aria-pressed="false">Voix</button>
+    </nav>
+    <section id="stories">
+      <form id="storyForm" class="card">
+        <h2>Une histoire à écouter</h2>
+        <label for="mode">Point de départ</label>
+        <select id="mode"><option value="narrate_text">Lire mon texte tel quel</option><option value="generate_story">Écrire une histoire à partir de mon idée</option></select>
+        <label for="storyTitle">Titre</label><input id="storyTitle" maxlength="120" required placeholder="La forêt des murmures">
+        <label for="storyText" id="textLabel">Votre récit</label>
+        <textarea id="storyText" rows="8" maxlength="12000" required placeholder="Au-delà des montagnes, une petite lumière brillait encore…"></textarea>
+        <small id="textHelp">Jusqu’à 12 000 caractères. Le texte saisi sera lu sans réécriture.</small>
+        <label for="voiceChoice">Voix du récit</label><select id="voiceChoice"><option value="">Décrire une nouvelle voix</option></select>
+        <div id="descriptionField"><label for="storyDescription">Description de la voix</label>
+          <textarea id="storyDescription" maxlength="1000" required>Une voix de conteuse chaleureuse, grave et posée, avec une diction claire et un léger mystère.</textarea></div>
+        <label for="storyLanguage">Langue du récit</label><select id="storyLanguage" class="language"></select>
+        <div class="actions"><button class="primary generate" type="submit" disabled>Générer l’audio</button></div>
+      </form>
+      <h2>Vos histoires</h2><div id="storyLibrary" aria-live="polite"></div>
+    </section>
+    <section id="voices" hidden>
+      <form id="voiceForm" class="card">
+        <h2>Imaginez une voix</h2>
+        <p class="muted">Qwen3-TTS VoiceDesign interprète votre description et crée un aperçu vocal.</p>
+        <label for="voiceTitle">Nom de la voix</label><input id="voiceTitle" maxlength="120" required placeholder="Le vieux gardien">
+        <label for="voiceDescription">Timbre, rythme, émotion…</label>
+        <textarea id="voiceDescription" maxlength="1000" rows="4" required placeholder="Une voix masculine âgée, un timbre grave et légèrement rocailleux, un débit lent et bienveillant."></textarea>
+        <label for="voiceText">Texte de l’aperçu</label>
+        <textarea id="voiceText" maxlength="500" required>Bonjour, voyageurs. Installez-vous près du feu, je vais vous raconter une histoire.</textarea>
+        <label for="voiceLanguage">Langue de l’aperçu</label><select id="voiceLanguage" class="language"></select>
+        <div class="actions"><button class="primary generate" type="submit" disabled>Créer et écouter la voix</button></div>
+        <p class="muted" style="margin:16px 0 0"><small>La description est enregistrée pour vos récits. Le timbre peut varier entre les passages : ce mode ne fige pas une identité vocale.</small></p>
+      </form>
+      <h2>Vos voix</h2><div id="voiceLibrary" aria-live="polite"></div>
+    </section>
+    <div id="job" role="status" aria-live="polite" hidden><span id="jobText"></span><progress id="progress"></progress><button type="button" id="cancel">Annuler</button></div>
+    <section id="result" class="card" hidden><h2 id="resultTitle">Votre création est prête</h2><audio id="resultAudio" controls preload="metadata"></audio><p id="resultHint" class="muted">Touchez Lecture pour écouter. Votre création est conservée dans la bibliothèque.</p></section>
+  </main>
+  <script>
+    'use strict';
+    const $ = id => document.getElementById(id);
+    let socket, available = false, busy = false, reconnectTimer;
+    function notice(text) { $('notice').textContent = text; $('notice').hidden = !text; }
+    function controls() { document.querySelectorAll('.generate').forEach(button => button.disabled = !available || busy || socket?.readyState !== WebSocket.OPEN); }
+    function send(message) {
+      if (socket?.readyState !== WebSocket.OPEN) { notice('La connexion au PC est interrompue.'); return false; }
+      socket.send(JSON.stringify(message)); return true;
+    }
+    function finish() { busy = false; $('job').hidden = true; controls(); }
+    function start(message) {
+      if (busy) return;
+      if (send(message)) { busy = true; controls(); $('job').hidden = false; $('jobText').textContent = 'Démarrage…'; $('progress').removeAttribute('value'); notice(''); }
+    }
+    function audioUrl(value) {
+      return typeof value === 'string' && /^\/studio\/audio\/[a-f0-9]{32}\.wav$/.test(value) ? value : '';
+    }
+    function renderLibrary(target, items) {
+      target.replaceChildren();
+      if (!items.length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = 'Vos créations apparaîtront ici.'; target.append(empty); }
+      for (const item of items) {
+        const card = document.createElement('article'); card.className = 'card';
+        const title = document.createElement('h3'); title.textContent = item.title;
+        const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = `${item.language} · ${Math.round(item.duration)} s`;
+        const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'none'; audio.src = audioUrl(item.audio_url);
+        const link = document.createElement('a'); link.href = audio.src; link.download = `${item.title}.wav`; link.textContent = 'Télécharger l’audio';
+        const details = document.createElement('details'), summary = document.createElement('summary'), text = document.createElement('p');
+        summary.textContent = 'Texte et voix'; text.textContent = `${item.description}\n\n${item.text}`; details.append(summary, text);
+        card.append(title, meta, audio, link, details); target.append(card);
+      }
+    }
+    function catalog(message) {
+      available = message.available; controls();
+      notice(available ? '' : 'Pour créer des voix, installez Qwen3-TTS sur le PC avec : uv sync --extra qwen. Les audios existants restent disponibles.');
+      for (const select of document.querySelectorAll('.language')) {
+        const previous = select.value || 'French'; select.replaceChildren();
+        for (const language of message.languages) select.add(new Option(language === 'French' ? 'Français' : language === 'English' ? 'Anglais' : language, language));
+        select.value = previous;
+      }
+      const previous = $('voiceChoice').value;
+      $('voiceChoice').replaceChildren(new Option('Décrire une nouvelle voix', ''));
+      for (const voice of message.voices) $('voiceChoice').add(new Option(voice.title, voice.id));
+      $('voiceChoice').value = message.voices.some(v => v.id === previous) ? previous : '';
+      voiceChanged();
+      renderLibrary($('voiceLibrary'), message.voices); renderLibrary($('storyLibrary'), message.stories);
+    }
+    function connect() {
+      clearTimeout(reconnectTimer);
+      socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
+      socket.addEventListener('open', () => { $('connection').textContent = 'Connecté au PC'; send({type:'studio_list'}); controls(); });
+      socket.addEventListener('message', event => {
+        if (typeof event.data !== 'string') return;
+        let message; try { message = JSON.parse(event.data); } catch { return; }
+        if (message.type === 'studio_catalog') catalog(message);
+        if (message.type === 'studio_started') { busy = true; controls(); $('job').hidden = false; }
+        if (message.type === 'studio_progress') {
+          $('jobText').textContent = message.message;
+          if (message.total) { $('progress').max = message.total; $('progress').value = message.current - 1; }
+        }
+        if (message.type === 'studio_result') {
+          finish(); $('result').hidden = false; $('resultTitle').textContent = message.item.title;
+          $('resultAudio').src = audioUrl(message.item.audio_url); $('resultAudio').load();
+          $('resultAudio').play().catch(() => {});
+          $('result').scrollIntoView({behavior:'smooth', block:'center'}); send({type:'studio_list'});
+        }
+        if (message.type === 'studio_cancelled') { finish(); notice('Génération annulée.'); }
+        if (message.type === 'studio_error' || message.type === 'error') { finish(); notice(message.message); }
+      });
+      socket.addEventListener('close', () => { $('connection').textContent = 'Déconnecté · reconnexion…'; finish(); available = false; controls(); reconnectTimer = setTimeout(connect, 2000); });
+      socket.addEventListener('error', () => socket.close());
+    }
+    function voiceChanged() { const custom = !$('voiceChoice').value; $('descriptionField').hidden = !custom; $('storyDescription').required = custom; }
+    $('voiceChoice').addEventListener('change', voiceChanged);
+    $('mode').addEventListener('change', () => {
+      const generated = $('mode').value === 'generate_story';
+      $('textLabel').textContent = generated ? 'Votre idée d’histoire' : 'Votre récit';
+      $('storyText').maxLength = generated ? 2000 : 12000;
+      $('textHelp').textContent = generated ? 'Jusqu’à 2 000 caractères. Le LLM local écrit le récit, puis Qwen le lit.' : 'Jusqu’à 12 000 caractères. Le texte saisi sera lu sans réécriture.';
+    });
+    $('voiceForm').addEventListener('submit', event => { event.preventDefault(); start({type:'voice_design', title:$('voiceTitle').value, description:$('voiceDescription').value, text:$('voiceText').value, language:$('voiceLanguage').value}); });
+    $('storyForm').addEventListener('submit', event => {
+      event.preventDefault(); const kind = $('mode').value;
+      const message = {type:kind, title:$('storyTitle').value, language:$('storyLanguage').value};
+      message[kind === 'generate_story' ? 'prompt' : 'text'] = $('storyText').value;
+      if ($('voiceChoice').value) message.voice_id = $('voiceChoice').value; else message.description = $('storyDescription').value;
+      start(message);
+    });
+    $('cancel').addEventListener('click', () => { send({type:'studio_cancel'}); $('jobText').textContent = 'Annulation après le chargement ou le passage en cours…'; });
+    document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('[data-tab]').forEach(tab => tab.setAttribute('aria-pressed', String(tab === button)));
+      $('stories').hidden = button.dataset.tab !== 'stories'; $('voices').hidden = button.dataset.tab !== 'voices';
+    }));
+    connect();
+  </script>
+</body>
+</html>

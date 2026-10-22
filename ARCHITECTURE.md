@@ -26,7 +26,14 @@ flowchart LR
     TTS -. played PCM .-> MOBILE
 ```
 
-Everything runs on one machine. Nothing ever calls the internet.
+Inference runs on one machine; model/voice downloads need network access on first use.
+
+Speech backends live side by side in `src/npc/engines/`: Piper (original),
+Pocket (native CPU streaming), and Qwen3-TTS VoiceDesign (description-driven).
+`npc.tts` owns the shared factory and compatibility imports. Backend switching
+preserves each engine's voice assignments; model imports remain lazy.
+Pocket diagnostics live in `tools/pocket_tts/` instead of `experiments/`.
+Model/voice downloads need network access on first use; inference is local.
 
 ## Threads and state
 
@@ -121,6 +128,15 @@ for the default speaker and every per-NPC voice, sharing the existing player.
 Mobile publication queues whole PCM segments without awaiting network I/O;
 bounded engine/client queues and send deadlines disconnect lagging clients.
 See [docs/mobile.md](docs/mobile.md) for framing, limitations and extension points.
+
+`voice_studio.py` owns written stories, descriptive voice profiles and atomic WAV
+exports under the campaign's `voice_studio/`. MobileServer serves the mobile UI
+and seekable WAVs, and admits one cancellable studio job at a time on a daemon
+thread. It sends progress/results only to the requester, without blocking the
+NPC worker or broadcasting studio audio into dialogue PCM. Story writing uses a
+separate LLM client and receives only the submitted idea and language. It never
+receives sheets, secrets, GM notes or conversation memory. The desktop session
+starts/stops the same MobileServer when enabled. See [docs/voice-studio.md](docs/voice-studio.md).
 
 ## Reading order
 

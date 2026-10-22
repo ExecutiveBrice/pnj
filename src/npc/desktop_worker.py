@@ -63,7 +63,7 @@ def build_app(config, emit, *, microphone=True):
             recorder = PushToTalkRecorder()
         except Exception as exc:
             emit(kind="log", text=f"Micro indisponible, la saisie reste active : {exc}")
-    if not {"Piper voice", "Pocket TTS", "Audio output", "Audio subsystem"} & failed:
+    if not {"Piper voice", "Pocket TTS", "Qwen3-TTS", "Audio output", "Audio subsystem"} & failed:
         try:
             from .tts import SpeakerFactory
 
@@ -90,6 +90,36 @@ def run_session(app, commands, emit) -> int:
     """Only this thread dispatches input; NPCApp serializes model work itself."""
     summarize = False
     app.start()
+    mobile = None
+    original_on_event = app._on_event
+    if app.config.mobile.enabled:
+        from .cli import mobile_announcement
+        from .mobile_server import MobileServer
+
+        try:
+            mobile = MobileServer(app, app.config.mobile.port, app.config.mobile.listen)
+            mobile.start()
+
+            def on_event(event):
+                original_on_event(event)
+                mobile.publish(event)
+
+            app._on_event = on_event
+            factory = app._make_speaker
+            if factory is not None:
+                factory.set_audio_observer(mobile.publish_audio)
+                factory.set_local_playback(app.config.mobile.local_playback)
+            for speaker in app._speakers.values():
+                speaker.on_audio = mobile.publish_audio
+                speaker.local_playback = app.config.mobile.local_playback
+            for text in mobile_announcement(app.config.mobile.listen, mobile.port):
+                emit(kind="log", text=text)
+        except Exception as exc:
+            app._on_event = original_on_event
+            if mobile is not None:
+                mobile.stop()
+            mobile = None
+            emit(kind="log", text=f"Serveur mobile indisponible : {exc}")
     emit(kind="ready", microphone=app.recorder is not None, npc=app.npc_name)
     try:
         for raw in commands:
@@ -123,7 +153,12 @@ def run_session(app, commands, emit) -> int:
             app.on_ptt_release()
         if app.speaker is not None:
             app.speaker.stop()
-        app.shutdown(summarize=summarize)
+        try:
+            app.shutdown(summarize=summarize)
+        finally:
+            if mobile is not None:
+                mobile.stop()
+            app._on_event = original_on_event
     return 0
 
 

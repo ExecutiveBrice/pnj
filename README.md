@@ -103,7 +103,7 @@ Le lanceur Windows **Lancer NPC.bat** installe aussi Pocket TTS, avec PyTorch
 sur CPU. Pour lancer depuis un terminal :
 
 ```powershell
-uv run --python 3.12 --locked --extra pocket --extra cuda npc gui
+uv run --python 3.12 --locked --extra pocket --extra qwen --extra cuda npc gui
 ```
 
 Dans **Voix**, sélectionnez **Pocket TTS**. Le personnage sélectionné dans
@@ -140,6 +140,47 @@ utilise les voix prédéfinies, sans clonage ni compte Hugging Face.
 Les campagnes existantes restent sur Piper. Changer de moteur depuis l'interface
 conserve les affectations de chaque moteur dans `[tts.voice_presets.*]` pour les
 retrouver au retour. La démo indépendante `Tester Pocket TTS.bat` reste disponible.
+
+### Qwen3-TTS VoiceDesign : studio vocal sur mobile
+
+Les trois moteurs se trouvent côte à côte dans `src/npc/engines/` : `piper.py`,
+`pocket.py` et `qwen.py`. Les outils de mesure Pocket sont dans `tools/pocket_tts/` ;
+le dossier `experiments` a été retiré. Le sélecteur **Voix** propose également
+**Qwen3-TTS VoiceDesign** ; le champ de voix contient alors une description libre.
+Les lanceurs installent les dépendances Pocket et Qwen. Installation manuelle :
+
+```powershell
+uv sync --python 3.12 --locked --extra pocket --extra qwen
+```
+
+Activez le compagnon mobile dans le `config.toml` de la campagne :
+
+```toml
+[mobile]
+enabled = true
+listen = "0.0.0.0"
+port = 8766
+```
+
+Après **Démarrer** dans l’interface PC (ou `npc run <campagne> --mobile`), ouvrez
+`http://ADRESSE_DU_PC:8766/` sur le téléphone connecté au même réseau.
+Le studio permet de décrire une voix et d’en écouter un aperçu, de lire un texte
+sans le réécrire, ou de faire rédiger une histoire depuis une idée par le LLM local
+puis de l’écouter. Les voix et récits restent disponibles dans la bibliothèque,
+avec lecture, téléchargement WAV et annulation. Le studio utilise Qwen même si
+les conversations PNJ restent sur Piper ou Pocket.
+
+Le premier usage télécharge le modèle VoiceDesign depuis Hugging Face ; ensuite
+les poids en cache fonctionnent localement. Ce dépôt configure PyTorch CPU :
+`qwen_device = "auto"` utilise donc le CPU. Une installation PyTorch CUDA adaptée
+est nécessaire pour utiliser `cuda:0`. Qwen est plus lourd que Pocket ; l’API
+Python produit un passage complet avant de rendre l’audio. L’annulation attend
+la fin du chargement ou du passage en cours. Une description réutilisée ne garantit
+pas un timbre identique entre les passages (ce mode ne fait pas de clonage).
+
+Le code natif Écho n’est pas dans ce dépôt. L’interface web mobile est incluse ici ;
+les nouvelles commandes pour un client natif sont décrites dans [docs/mobile.md](docs/mobile.md).
+L’implémentation suit l’[API officielle VoiceDesign](https://github.com/QwenLM/Qwen3-TTS#voice-design).
 
 If Tkinter is missing, install a Python distribution with Tcl/Tk and recreate
 the virtual environment using that interpreter. On Linux, install the

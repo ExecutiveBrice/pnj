@@ -50,6 +50,40 @@ def test_desktop_recording_does_not_use_evdev(config):
     assert not llm.summarize_calls
 
 
+def test_desktop_session_serves_mobile_studio_and_forwards_dialogue(config):
+    import httpx
+    from websockets.sync.client import connect
+
+    config.mobile.enabled = True
+    config.mobile.port = 0
+    config.mobile.local_playback = False
+    events, messages = [], []
+    speaker = FakeSpeaker()
+    app = NPCApp(config, llm=FakeLLM(), speaker=speaker, on_event=events.append)
+
+    def session_commands():
+        announcement = next(message["text"] for message in messages
+                            if message.get("text", "").startswith("Mobile server:"))
+        url = announcement.removeprefix("Mobile server: ")
+        page = httpx.get(url.replace("ws://", "http://").removesuffix("ws"), trust_env=False)
+        assert page.status_code == 200 and "Le studio du conteur" in page.text
+        assert speaker.local_playback is False
+        with connect(url) as ws:
+            assert json.loads(ws.recv())["type"] == "hello"
+            ws.send(json.dumps({"type": "say", "text": "Bonjour."}))
+            for _ in range(20):
+                message = json.loads(ws.recv(timeout=2))
+                if message["type"] == "npc_replied":
+                    assert message["text"] == "Greetings, traveler."
+                    break
+            else:
+                pytest.fail("Desktop didn't publish its reply to the phone")
+        yield json.dumps({"action": "shutdown", "summarize": False})
+
+    assert run_session(app, session_commands(), lambda **msg: messages.append(msg)) == 0
+    assert app._on_event == events.append
+
+
 @pytest.mark.parametrize("action", ["/quit", "/end"])
 def test_desktop_honors_exit_commands(config, action):
     llm = FakeLLM()

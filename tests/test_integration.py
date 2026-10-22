@@ -9,6 +9,27 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
+def test_qwen_voice_design_with_prepared_local_weights():
+    """Opt in with NPC_TEST_QWEN_MODEL pointing to a prepared local model folder."""
+    import os
+    import threading
+    from pathlib import Path
+
+    import numpy as np
+
+    folder = os.environ.get("NPC_TEST_QWEN_MODEL")
+    if not folder or not Path(folder).is_dir():
+        pytest.skip("set NPC_TEST_QWEN_MODEL to a downloaded VoiceDesign model directory")
+    pytest.importorskip("qwen_tts")
+    from npc.engines.qwen import QwenRuntime
+
+    runtime = QwenRuntime(folder, os.environ.get("NPC_TEST_QWEN_DEVICE", "cpu"))
+    pcm, rate = runtime.synthesize("Bonjour, voyageurs.", "Une voix calme et grave.",
+                                   "French", cancel=threading.Event())
+    assert pcm.dtype == np.int16 and len(pcm) > rate * .2
+    assert np.max(np.abs(pcm.astype(np.int32))) > 100
+
+
 def test_piper_whisper_roundtrip(config, tmp_path):
     """Synthesize speech with Piper, transcribe it back with whisper."""
     if not config.tts.voice_path.exists():

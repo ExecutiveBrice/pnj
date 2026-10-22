@@ -9,5 +9,5 @@ if errorlevel 1 (
     exit /b 1
 )
 echo Pocket TTS francais - modele local sur CPU, audio en streaming.
-uv run --project experiments/pocket_tts --python 3.12 --locked python experiments/pocket_tts/demo.py %*
+uv run --project tools/pocket_tts --python 3.12 --locked python tools/pocket_tts/demo.py %*
 if errorlevel 1 pause

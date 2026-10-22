@@ -36,6 +36,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+qwen = [
+    "qwen-tts>=0.1.1,<0.2; python_version < '3.14'",
+    "torch>=2.6; python_version < '3.14'",
+    "torchaudio==2.6.0; python_version < '3.14'",
+]
 pocket = [
     "pocket-tts[audio]==3.3.0; python_version < '3.15'",
     "torch==2.6.0; python_version < '3.14'",
@@ -48,6 +53,7 @@ cuda = [
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
+torchaudio = [{ index = "pytorch-cpu", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

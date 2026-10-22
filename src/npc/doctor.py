@@ -162,6 +162,23 @@ def run_checks(config: Config, deep: bool = False, *,
 
 
 def tts_checks(config: Config, deep: bool = False) -> list[CheckResult]:
+    if config.tts.backend == "qwen":
+        from importlib.util import find_spec
+
+        if find_spec("qwen_tts") is None:
+            return [CheckResult("Qwen3-TTS", False, detail="optional dependency missing",
+                                fix="uv sync --extra qwen")]
+        result = CheckResult("Qwen3-TTS", True,
+                             detail=f"VoiceDesign / {config.tts.qwen_device}")
+        if deep:
+            try:
+                from .engines.qwen import get_runtime
+
+                runtime = get_runtime(config.tts.qwen_model, config.tts.qwen_device)
+                result.detail = f"VoiceDesign loaded on {runtime.device}"
+            except Exception as exc:
+                result = CheckResult("Qwen3-TTS", False, detail=str(exc))
+        return [result]
     if config.tts.backend == "pocket":
         from importlib.util import find_spec
 
@@ -228,6 +245,10 @@ def npc_voice_checks(config: Config) -> list[CheckResult]:
                 fix="rename the [tts.voices] key or the character file",
             ))
     for voice in sorted(set(config.tts.voices.values()) - {config.tts.voice}):
+        if config.tts.backend == "qwen":
+            checks.append(CheckResult(f"NPC voice ({voice})", bool(voice.strip()),
+                                      detail="Qwen VoiceDesign description"))
+            continue
         if config.tts.backend == "pocket":
             from .pocket import POCKET_VOICES
 

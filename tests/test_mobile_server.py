@@ -89,7 +89,9 @@ def test_hello_and_multiple_clients(server):
                              {"id": "mordrek", "name": "Mordrek"}],
                     "capabilities": {"text_input": True, "audio_input": False,
                                      "audio_output": True, "npc_switch": True,
-                                     "secret_approval": False}}
+                                     "secret_approval": False,
+                                     "voice_design": server.studio.available,
+                                     "story_generation": server.studio.available}}
         assert recv(first) == recv(second) == expected
         server.publish(NpcReplied("Mordrek", "Écoutez…"))
         expected = {"type": "npc_replied", "npc": "Mordrek", "text": "Écoutez…"}

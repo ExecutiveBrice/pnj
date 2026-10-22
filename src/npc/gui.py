@@ -75,7 +75,7 @@ class DesktopWindow:
         self.tts_backend = tk.StringVar()
         self.backend_picker = ttk.Combobox(voices, textvariable=self.tts_backend,
                                           state="readonly", width=17,
-                                          values=("Piper", "Pocket TTS"))
+                                          values=("Piper", "Pocket TTS", "Qwen3-TTS VoiceDesign"))
         self.backend_picker.pack(side="left", padx=(0, 8))
         self.backend_picker.bind("<<ComboboxSelected>>", self.change_backend)
         self.voice = tk.StringVar()
@@ -225,10 +225,13 @@ class DesktopWindow:
             config = load_config(Path(self.path.get()))
             stem = self.language_targets.get(self.language_target.get())
             pocket = config.tts.backend == "pocket"
-            self.tts_backend.set("Pocket TTS" if pocket else "Piper")
+            self.tts_backend.set({"piper": "Piper", "pocket": "Pocket TTS",
+                                  "qwen": "Qwen3-TTS VoiceDesign"}[config.tts.backend])
             values = list(POCKET_VOICES) if pocket else sorted(
                 {path.stem for path in Path(config.tts.voices_dir).expanduser().glob("*.onnx")}
                 | {config.tts.voice} | set(config.tts.voices.values()))
+            if config.tts.backend == "qwen":
+                values = sorted({config.tts.voice} | set(config.tts.voices.values()))
             if stem is not None:
                 values.insert(0, "Suivre la campagne")
             self.voice_picker.configure(values=values, state="readonly" if pocket else "normal")
@@ -245,8 +248,8 @@ class DesktopWindow:
         if self.engine.process is not None:
             return
         try:
-            save_tts(Path(self.path.get()), backend="pocket" if self.tts_backend.get() == "Pocket TTS"
-                     else "piper")
+            save_tts(Path(self.path.get()), backend={"Pocket TTS": "pocket", "Piper": "piper",
+                     "Qwen3-TTS VoiceDesign": "qwen"}[self.tts_backend.get()])
             self.refresh_voice()
             self.append(f"Moteur vocal de la campagne : {self.tts_backend.get()}. "
                         "Préparez les modèles au premier usage. Pocket TTS précharge "

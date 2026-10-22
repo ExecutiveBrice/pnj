@@ -44,6 +44,9 @@ class TtsConfig:
     voices_dir: str = str(DEFAULT_VOICES_DIR)
     voices: dict[str, str] = field(default_factory=dict)  # [tts.voices]: character stem → voice
     voice_presets: dict[str, dict[str, str]] = field(default_factory=dict)
+    qwen_model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+    qwen_device: str = "auto"  # auto, cpu, cuda or cuda:N
+    qwen_language: str = "Auto"
 
     @property
     def voice_path(self) -> Path:
@@ -53,7 +56,7 @@ class TtsConfig:
         return Path(self.voices_dir).expanduser() / f"{voice}.onnx"
 
     def voice_resource_for(self, voice: str) -> Path | str:
-        return voice if self.backend == "pocket" else self.voice_path_for(voice)
+        return self.voice_path_for(voice) if self.backend == "piper" else voice
 
 
 @dataclass
@@ -170,18 +173,27 @@ def load_config(campaign_dir: Path) -> Config:
         for value in config.character_languages.values()
     ):
         raise ConfigError(f"{toml_path}: invalid [character_languages]; use {', '.join(LANGUAGES)}")
-    if config.tts.backend not in ("piper", "pocket"):
-        raise ConfigError(f'{toml_path}: tts.backend must be "piper" or "pocket"')
+    if config.tts.backend not in ("piper", "pocket", "qwen"):
+        raise ConfigError(f'{toml_path}: tts.backend must be "piper", "pocket" or "qwen"')
     if config.tts.model not in ("french", "french_24l", "english"):
         raise ConfigError(f'{toml_path}: tts.model must be "french", "french_24l" or "english"')
     if not isinstance(config.tts.voice_presets, dict) or any(
-        backend not in ("piper", "pocket") or not isinstance(values, dict)
+        backend not in ("piper", "pocket", "qwen") or not isinstance(values, dict)
         or any(not isinstance(value, str) for value in values.values())
         for backend, values in config.tts.voice_presets.items()
     ):
         raise ConfigError(f"{toml_path}: invalid [tts.voice_presets] voice assignments")
     if "voice" not in data.get("tts", {}):
-        config.tts.voice = "estelle" if config.tts.backend == "pocket" else default_voice(config.language)
+        config.tts.voice = _default_tts_voice(config.tts.backend, config.language)
+    from .engines.qwen import QWEN_LANGUAGES
+
+    if config.tts.qwen_language not in QWEN_LANGUAGES:
+        raise ConfigError(f"{toml_path}: invalid tts.qwen_language")
+    if (not isinstance(config.tts.qwen_device, str)
+            or not re.fullmatch(r"auto|cpu|cuda(?::\d+)?", config.tts.qwen_device)):
+        raise ConfigError(f"{toml_path}: tts.qwen_device must be auto, cpu, cuda or cuda:N")
+    if not isinstance(config.tts.qwen_model, str) or not config.tts.qwen_model.strip():
+        raise ConfigError(f"{toml_path}: tts.qwen_model must be a model ID or local directory")
     if config.tts.backend == "piper":
         for stem, language in config.character_languages.items():
             config.tts.voices.setdefault(stem, default_voice(language))
@@ -280,19 +292,29 @@ def _set_table_value(source: str, table: str, key: str, value: str) -> str:
     return source[:match.start()] + block + source[match.end():]
 
 
+def _default_tts_voice(backend: str, language: str) -> str:
+    if backend == "pocket":
+        return "estelle"
+    if backend == "qwen":
+        from .engines.qwen import DEFAULT_VOICE
+
+        return DEFAULT_VOICE
+    return default_voice(language)
+
+
 def save_tts(campaign_dir: Path, *, backend: str | None = None,
              voice: str | None = None, stem: str | None = None) -> None:
     config = load_config(campaign_dir)
     path = config.campaign_dir / "config.toml"
     source = path.read_text(encoding="utf-8") if path.exists() else ""
     if backend is not None and backend != config.tts.backend:
-        if backend not in ("piper", "pocket"):
+        if backend not in ("piper", "pocket", "qwen"):
             raise ConfigError(f"Unknown speech engine: {backend}")
         # Keep each engine's assignments when the user switches back and forth.
         previous = {"": config.tts.voice, **config.tts.voices}
         source = _replace_table(source, f"tts.voice_presets.{config.tts.backend}", previous)
         restored = dict(config.tts.voice_presets.get(backend, {}))
-        default = restored.pop("", "estelle" if backend == "pocket" else default_voice(config.language))
+        default = restored.pop("", _default_tts_voice(backend, config.language))
         source = _set_table_value(source, "tts", "backend", backend)
         source = _set_table_value(source, "tts", "voice", default)
         source = _replace_table(source, "tts.voices", restored)

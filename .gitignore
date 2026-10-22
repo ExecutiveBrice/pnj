@@ -3,7 +3,10 @@ __pycache__/
 *.pyc
 dist/
 .pytest_cache/
+.pytest*-tmp/
 .ruff_cache/
+.uv-cache/
+**/voice_studio/
 
 # Personal campaign content (characters, logbooks, session transcripts).
 # Remove this line if you want to version your campaigns.

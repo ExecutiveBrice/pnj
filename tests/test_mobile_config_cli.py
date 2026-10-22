@@ -69,11 +69,13 @@ def test_mobile_config_rejects_invalid_types_and_values(tmp_path, assignment):
 
 def test_mobile_announcement_and_ipv6():
     assert cli.mobile_announcement("127.0.0.1", 8766) == [
-        "Mobile server: ws://127.0.0.1:8766/ws"]
-    assert cli.mobile_announcement("::1", 8766) == ["Mobile server: ws://[::1]:8766/ws"]
+        "Mobile server: ws://127.0.0.1:8766/ws",
+        "Studio voix et histoires : http://127.0.0.1:8766/"]
+    assert cli.mobile_announcement("::1", 8766) == ["Mobile server: ws://[::1]:8766/ws",
+                                                   "Studio voix et histoires : http://[::1]:8766/"]
     lan = cli.mobile_announcement("192.168.1.20", 8766)
     assert lan[0] == "Mobile server: ws://192.168.1.20:8766/ws"
-    assert "anyone on this network can control" in lan[1]
+    assert "anyone on this network can control" in lan[2]
 
 
 @pytest.mark.parametrize("mode", ["enabled", "disabled", "failure"])

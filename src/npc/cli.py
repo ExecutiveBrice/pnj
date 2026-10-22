@@ -288,7 +288,7 @@ def cmd_run(args) -> int:
 
     speaker = make_speaker = None
     audio_required = not (mobile_enabled and not config.mobile.local_playback)
-    tts_failed = {"Piper voice", "Pocket TTS"} & failed_soft
+    tts_failed = {"Piper voice", "Pocket TTS", "Qwen3-TTS"} & failed_soft
     if not tts_failed and (not audio_required or "Audio output" not in failed_soft):
         from .tts import SpeakerFactory
 
@@ -412,7 +412,8 @@ def mobile_announcement(listen: str, port: int) -> list[str]:
     host = lan_address(listen)
     if ":" in host:
         host = f"[{host}]"
-    lines = [f"Mobile server: ws://{host}:{port}/ws"]
+    lines = [f"Mobile server: ws://{host}:{port}/ws",
+             f"Studio voix et histoires : http://{host}:{port}/"]
     if not is_loopback(listen):
         lines.append("! anyone on this network can control the NPC; "
                      "no authentication or encryption. Player events only.")

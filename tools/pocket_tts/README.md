@@ -5,8 +5,9 @@ Prérequis : uv et Python 3.12 avec Tkinter. Les fichiers de configuration de
 Pocket TTS nécessitent le mode UTF-8 sous Windows ; le lanceur l'active automatiquement.
 
 Cette démo utilise Pocket TTS 3.3.0, son propre environnement Python, son propre
-cache et PyTorch CPU. Elle ne remplace pas encore Piper dans les conversations NPC.
-Les campagnes existantes ne sont pas modifiées.
+cache et PyTorch CPU. Le moteur intégré aux conversations NPC se trouve dans
+`src/npc/engines/pocket.py`, en parallèle de Piper et Qwen. Cette interface conserve
+les mesures, exports WAV et essais de clonage sans modifier les campagnes.
 
 Les premiers essais sont consignés dans [BENCHMARK.md](BENCHMARK.md) : à chaud,
 premier bloc disponible en 0,11 s et envoyé à PortAudio en 0,33 s sur ce PC.
@@ -60,13 +61,13 @@ n'accepte aucune condition et ne configure aucun compte automatiquement.
 Depuis la racine du projet :
 
 ```powershell
-uv run --project experiments/pocket_tts --python 3.12 --locked python -X utf8 experiments/pocket_tts/demo.py
+uv run --project tools/pocket_tts --python 3.12 --locked python -X utf8 tools/pocket_tts/demo.py
 ```
 
 Mesures sans interface, avec écoute progressive :
 
 ```powershell
-uv run --project experiments/pocket_tts --python 3.12 --locked python -X utf8 experiments/pocket_tts/demo.py --text "Bonjour, voyageurs. Entrez donc !" --repeat 3 --play
+uv run --project tools/pocket_tts --python 3.12 --locked python -X utf8 tools/pocket_tts/demo.py --text "Bonjour, voyageurs. Entrez donc !" --repeat 3 --play
 ```
 
 Retirer `--play` pour mesurer la génération seule. Utiliser `--reference CHEMIN.wav`
@@ -75,7 +76,7 @@ pour un extrait personnel, ou `--language french_24l` pour le profil qualité.
 Tests sans modèles ni matériel, avec l'environnement principal :
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest experiments/pocket_tts/tests -q
+.\.venv\Scripts\python.exe -m pytest tools/pocket_tts/tests -q
 ```
 
 Sources : https://github.com/kyutai-labs/pocket-tts

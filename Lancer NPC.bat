@@ -14,5 +14,5 @@ if not errorlevel 1 (
     set "NPC_UV_EXTRA=--extra cuda"
     echo Carte NVIDIA detectee : activation de CUDA pour Whisper.
 )
-uv run --python 3.12 --locked --extra pocket %NPC_UV_EXTRA% npc gui
+uv run --python 3.12 --locked --extra pocket --extra qwen %NPC_UV_EXTRA% npc gui
 if errorlevel 1 pause

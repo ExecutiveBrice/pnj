@@ -7,6 +7,11 @@ It works offline and runs alongside the CLI and overlay. Start it with:
 npc run campaigns/mygame --mobile
 ```
 
+The desktop application also starts this endpoint when `[mobile] enabled = true`.
+Open `http://PC_ADDRESS:8766/` on a phone to use the included voice/story studio.
+See [VoiceDesign studio commands and setup](voice-studio.md) for creating voices,
+narrating written text, story generation, saved WAV playback and native-client integration.
+
 Or configure the campaign's `config.toml`:
 
 ```toml
@@ -30,7 +35,9 @@ If the port is unavailable, the CLI continues with mobile disabled.
 
 ## Connection and commands
 
-Connect to `/ws`. Other paths return HTTP 404. The first text frame is UTF-8 JSON:
+Connect to `/ws`. `/` serves the mobile voice/story studio and
+`/studio/audio/<id>.wav` serves its generated audio. Other paths return HTTP 404.
+The first text frame is UTF-8 JSON:
 
 ```json
 {"type":"hello","protocol":1,"npc":"Mordrek","state":"idle","npcs":[{"id":"mordrek","name":"Mordrek"},{"id":"vess","name":"Vess"}],"capabilities":{"text_input":true,"audio_input":true,"audio_output":true,"npc_switch":true,"secret_approval":true}}
@@ -65,7 +72,7 @@ are serialized by the same worker as CLI actions; concurrent clients share
 the active NPC and conversation. A queued command is not necessarily complete
 when the next status request is answered. Invalid/ambiguous requests produce
 `{"type":"error","message":"..."}` for the requester. Internal exception
-details stay local. Commands larger than 32 KiB close the connection (1009).
+details stay local. Commands larger than 64 KiB close the connection (1009).
 
 States are `idle`, `processing`, `speaking`, and `recording` (local microphone).
 Stop interrupts local playback, including the existing sentence-streaming path;

@@ -13,10 +13,12 @@ import ipaddress
 import json
 import logging
 import queue
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
+from importlib.resources import files
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -24,6 +26,7 @@ import numpy as np
 from .audio.recorder import AudioClip
 from .events import Event, SecretDisclosuresChanged
 from .mobile_protocol import PROTOCOL_VERSION, encode, event_to_message, gm_event_to_message
+from .voice_studio import StudioCancelled, VoiceStudio
 
 if TYPE_CHECKING:
     from .app import NPCApp
@@ -47,7 +50,8 @@ class _GMFrames:
 
 class MobileServer:
     def __init__(self, app: NPCApp, port: int = 8766, listen: str = "127.0.0.1", *,
-                 authorize: Callable | None = None, authorize_gm: Callable | None = None):
+                 authorize: Callable | None = None, authorize_gm: Callable | None = None,
+                 studio=None):
         self.app = app
         self.port = port
         self.listen = listen
@@ -66,6 +70,12 @@ class MobileServer:
         self._scheduled = False
         self._overflow = False
         self._clients: dict = {}
+        if studio is None:
+            from .llm import make_llm_client
+
+            studio = VoiceStudio(app.config, llm_factory=lambda: make_llm_client(app.config.llm))
+        self.studio = studio
+        self._studio_job = None
 
     def start(self) -> None:
         if self._thread is not None:
@@ -185,21 +195,64 @@ class MobileServer:
         self._stop_future = self._loop.create_future()
         async with serve(self._handler, self.listen, self.port,
                          process_request=self._process_request,
-                         max_size=32768, max_queue=16, close_timeout=1) as server:
+                         max_size=65536, max_queue=16, close_timeout=1) as server:
             self.port = server.sockets[0].getsockname()[1]
             self._ready.set()
             await self._stop_future
 
     def _shutdown(self) -> None:
+        if self._studio_job is not None:
+            self._studio_job[1].set()
         if self._stop_future is not None and not self._stop_future.done():
             self._stop_future.set_result(None)
 
     def _process_request(self, connection, request):
-        if request.path != "/ws":
-            return connection.respond(HTTPStatus.NOT_FOUND, "Use /ws\n")
         if self._authorize is not None and not self._authorize(request):
             return connection.respond(HTTPStatus.UNAUTHORIZED, "Unauthorized\n")
-        return None
+        if request.path == "/ws":
+            return None
+        if request.path == "/":
+            body = files("npc").joinpath("static/mobile.html").read_bytes()
+            return self._http_response(connection, body, "text/html; charset=utf-8")
+        match = re.fullmatch(r"/studio/audio/([a-f0-9]{32})\.wav", request.path)
+        if match and (path := self.studio.audio_path(match[1])) is not None:
+            # Safari and native players use byte ranges to seek/replay WAV files.
+            size = path.stat().st_size
+            start, end, status = 0, size - 1, HTTPStatus.OK
+            headers = {"Accept-Ranges": "bytes"}
+            range_header = request.headers.get("Range")
+            if range_header is not None:
+                selected = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+                if selected and any(selected.groups()):
+                    first, last = selected.groups()
+                    if first:
+                        start, end = int(first), min(int(last), size - 1) if last else size - 1
+                    else:
+                        start = max(0, size - int(last))
+                    status = HTTPStatus.PARTIAL_CONTENT
+                if not selected or not any(selected.groups()) or start > end or start >= size:
+                    response = connection.respond(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "")
+                    response.headers["Content-Range"] = f"bytes */{size}"
+                    return response
+                headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+            with path.open("rb") as audio:
+                audio.seek(start)
+                body = audio.read(end - start + 1)
+            return self._http_response(connection, body, "audio/wav", status, headers)
+        return connection.respond(HTTPStatus.NOT_FOUND, "Use / or /ws\n")
+
+    @staticmethod
+    def _http_response(connection, body, content_type, status=HTTPStatus.OK, headers=None):
+        response = connection.respond(status, "")
+        response.body = body
+        del response.headers["Content-Type"]
+        del response.headers["Content-Length"]
+        response.headers["Content-Type"] = content_type
+        response.headers["Content-Length"] = str(len(body))
+        response.headers["Cache-Control"] = "no-store"
+        for key, value in (headers or {}).items():
+            response.headers[key] = value
+        return response
 
     async def _send(self, connection, outbox) -> None:
         while True:
@@ -223,6 +276,8 @@ class MobileServer:
                                       "audio_output": self.app.speaker is not None,
                                       "npc_switch": True,
                                       "secret_approval": gm,
+                                      "voice_design": self.studio.available,
+                                      "story_generation": self.studio.available,
                                   }}), encode({"type": "npc_list", "npcs": snapshot["npcs"]})))
         self._clients[connection] = outbox
         if gm:
@@ -232,7 +287,8 @@ class MobileServer:
         async def receive():
             upload = _AudioUpload()
             async for raw in connection:
-                response = await self._command(raw, upload, gm=gm)
+                response = await self._command(raw, upload, gm=gm,
+                                               connection=connection, outbox=outbox)
                 if response is not None:
                     frames = (encode(response),)
                     if response["type"] == "status":
@@ -250,6 +306,8 @@ class MobileServer:
         except (ConnectionClosed, TimeoutError):
             pass
         finally:
+            if self._studio_job is not None and self._studio_job[0] is connection:
+                self._studio_job[1].set()
             self._clients.pop(connection, None)
             self._gm_clients.discard(connection)
             sender.cancel()
@@ -259,7 +317,60 @@ class MobileServer:
     def _disclosure_snapshot(self) -> dict:
         return {"type": "secret_disclosure_list", "requests": self.app.secret_disclosures()}
 
-    async def _command(self, raw, upload: _AudioUpload, *, gm: bool = False) -> dict | None:
+    def _start_studio(self, connection, outbox, message):
+        if self._studio_job is not None:
+            return {"type": "error", "message": "Le studio est occupé. Réessayez après la génération."}
+        try:
+            request = self.studio.validate(message)
+        except ValueError as exc:
+            return {"type": "error", "message": str(exc)}
+        cancel = threading.Event()
+        job = (connection, cancel)
+        self._studio_job = job
+        loop = self._loop
+
+        def reply(message):
+            def deliver():
+                if connection in self._clients:
+                    self._enqueue(connection, outbox, (encode(message),))
+            if not loop.is_closed():
+                try:
+                    loop.call_soon_threadsafe(deliver)
+                except RuntimeError:
+                    pass
+
+        def progress(message, **fields):
+            reply({"type": "studio_progress", "message": message, **fields})
+
+        def completed():
+            if self._studio_job is job:
+                self._studio_job = None
+
+        def worker():
+            try:
+                result = self.studio.run(request, cancel=cancel, progress=progress)
+                reply(result)
+            except StudioCancelled:
+                reply({"type": "studio_cancelled"})
+            except Exception:
+                log.exception("Voice studio generation failed")
+                reply({"type": "studio_error", "message":
+                       "Échec de génération. Vérifiez Qwen3-TTS (uv sync --extra qwen), "
+                       "les modèles et le serveur LLM sur le PC."})
+            finally:
+                if not loop.is_closed():
+                    try:
+                        loop.call_soon_threadsafe(completed)
+                    except RuntimeError:
+                        pass
+
+        # Enqueue before starting the producer: started always precedes progress.
+        self._enqueue(connection, outbox, (encode({"type": "studio_started"}),))
+        threading.Thread(target=worker, name="voice-studio", daemon=True).start()
+        return None
+
+    async def _command(self, raw, upload: _AudioUpload, *, gm: bool = False,
+                       connection=None, outbox=None) -> dict | None:
         def error(message):
             return {"type": "error", "message": message}
         if not isinstance(raw, str):
@@ -304,6 +415,19 @@ class MobileServer:
                 return None
             if kind == "status":
                 return {"type": "status", **self.app.player_status()}
+            if kind == "studio_list":
+                return self.studio.catalog()
+            if kind == "studio_cancel":
+                if self._studio_job is not None and self._studio_job[0] is connection:
+                    self._studio_job[1].set()
+                return None
+            if kind in ("voice_design", "narrate_text", "generate_story"):
+                if not self.studio.available:
+                    return error("Qwen3-TTS indisponible : exécutez uv sync --extra qwen sur le PC.")
+                if connection is None or outbox is None:
+                    return error("Une connexion mobile est nécessaire.")
+                upload.data = None
+                return self._start_studio(connection, outbox, message)
             # Changing NPC, submitting text or interrupting discards unfinished audio.
             upload.data = None
             if kind == "resolve_secret_disclosure":

@@ -6,7 +6,7 @@ if ! command -v uv >/dev/null 2>&1; then
     read -r '?Appuyez sur Entrée pour fermer…'
     exit 1
 fi
-uv run --python 3.12 --frozen npc gui
+uv run --python 3.12 --locked --extra pocket --extra qwen npc gui
 if [[ $? -ne 0 ]]; then
     read -r '?Appuyez sur Entrée pour fermer…'
 fi

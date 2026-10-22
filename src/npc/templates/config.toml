@@ -29,11 +29,15 @@
 # vad_max_seconds = 30              # tap mode: hard cap on one utterance
 
 [tts]
-# backend = "piper"                # "pocket": CPU speech with native audio streaming
+# backend = "piper"                # piper, pocket (CPU streaming), qwen (VoiceDesign)
 # model = "french"                 # Pocket: french (fast), french_24l, english
 # voice = "en_GB-alba-medium"       # optional override; French defaults to fr_FR-siwis-medium
 #                                   # Pocket defaults to "estelle"; also marius, javert, jean, alba, anna
 # voices_dir = "~/.local/share/npc/voices"
+# qwen_model = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"  # model ID or downloaded directory
+# qwen_device = "auto"             # auto, cpu, cuda:0 (requires a CUDA PyTorch build)
+# qwen_language = "Auto"           # French, English, …; for Qwen NPC dialogue
+# voice = "A warm, calm storyteller voice."          # description when backend = qwen
 
 # [tts.voices]                      # per-NPC voices; key = character file stem
 # korval = "en_GB-northern_english_male-medium"   # characters/korval.md
@@ -51,7 +55,7 @@
 [mobile]
 # enabled = false                   # GM companion WebSocket API, additional to CLI/overlay
 # listen = "127.0.0.1"              # explicit LAN opt-in: your IP or "0.0.0.0"
-# port = 8766                       # ws://127.0.0.1:8766/ws (no authentication/encryption)
+# port = 8766                       # Studio: http://127.0.0.1:8766/ ; API: /ws
 # local_playback = true             # false: client audio only, avoiding PC/phone echo
   # secret_approval = true            # trusted GM remote; false for player-only clients
 

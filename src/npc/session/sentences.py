@@ -34,6 +34,6 @@ def iter_sentences(chunks: Iterable[str], min_chars: int = MIN_CHARS) -> Iterato
 
 def _next_break(buffer: str, min_chars: int) -> int | None:
     for match in _SENTENCE_END.finditer(buffer):
-        if match.end() >= min_chars:
+        if len(buffer[:match.end()].strip()) >= min_chars:
             return match.end()
     return None

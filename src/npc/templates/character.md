@@ -3,6 +3,11 @@
 *(Example NPC — replace everything in this file with your own character.
 The first `# heading` is used as the NPC's display name.)*
 
+- Scénario : The Glass Monolith.
+- Attitude : Wary, measured and respectful of ancient relics.
+- Motivation : Protect the shrine and understand the elder worlds.
+- Levier de négociation : Show respect for the shrine and bring evidence about relics.
+
 ## Who they are
 
 Vess is a wary, middle-aged Vault Priest who tends a shrine built into the base

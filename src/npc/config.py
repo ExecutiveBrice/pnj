@@ -17,7 +17,7 @@ DEFAULT_VOICES_DIR = Path.home() / ".local" / "share" / "npc" / "voices"
 @dataclass
 class LlmConfig:
     backend: str = "ollama"  # or "openai" for Jan, LM Studio, llama.cpp, vLLM, …
-    model: str = "qwen2.5:3b"
+    model: str = "qwen2.5:7b-instruct"
     host: str = "http://localhost:11434"
     timeout_seconds: float = 60.0  # per-request cap; a hung server becomes an error, not a stuck session
     retries: int = 1  # extra attempts after connection-level failures (never after HTTP errors)

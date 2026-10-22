@@ -11,6 +11,11 @@ def test_min_chars_merges_short_sentences():
     ]
 
 
+def test_whitespace_does_not_count_toward_minimum_sentence_length():
+    chunks = ["  Yes.", " ", "Wait. ", "No. ", "Please stay."]
+    assert list(iter_sentences(chunks)) == ["Yes. Wait.", "No. Please stay."]
+
+
 def test_splits_across_chunk_boundaries():
     chunks = ["What brings you to", " the docks? Speak quickly, stranger."]
     assert list(iter_sentences(chunks)) == [

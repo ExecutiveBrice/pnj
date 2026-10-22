@@ -186,7 +186,7 @@ def tts_checks(config: Config, deep: bool = False) -> list[CheckResult]:
 
         if find_spec("pocket_tts") is None:
             return [CheckResult("Pocket TTS", False, detail="optional dependency missing",
-                                fix='uv sync --extra pocket   # or Lancer NPC.bat')]
+                                fix="uv sync --extra pocket")]
         if config.tts.voice not in POCKET_VOICES:
             return [CheckResult("Pocket TTS", False, detail=f"unknown voice: {config.tts.voice}",
                                 fix=f"Choose one of: {', '.join(POCKET_VOICES)}")]
@@ -324,8 +324,9 @@ def npc_lore_checks(config: Config) -> list[CheckResult]:
     checks: list[CheckResult] = []
     adventure = (config.adventure_file.read_text(encoding="utf-8")
                  if config.adventure_file.exists() else "")
+    lore_cache = {}
     for ref in discover_character_files(config.campaign_dir):
-        slot = load_slot(ref, config)
+        slot = load_slot(ref, config, lore_cache=lore_cache)
         for error in slot.lore_errors:
             checks.append(CheckResult(
                 f"Lore ({ref.stem})", False, detail=error,

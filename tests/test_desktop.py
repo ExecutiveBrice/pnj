@@ -20,6 +20,11 @@ def commands(*items):
     return io.StringIO("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in items))
 
 
+def after_opening(app, items):
+    app._queue.join()
+    yield from items
+
+
 def test_desktop_dialogue_then_summary(config):
     llm = FakeLLM()
     events, messages = [], []
@@ -42,11 +47,11 @@ def test_desktop_recording_does_not_use_evdev(config):
     llm = FakeLLM()
     recorder = FakeRecorder()
     app = NPCApp(config, llm=llm, recorder=recorder, transcriber=FakeTranscriber())
-    run_session(app, commands(
+    run_session(app, after_opening(app, commands(
         {"action": "record"}, {"action": "release"},
         {"action": "shutdown", "summarize": False},
-    ), lambda **msg: None)
-    assert len(llm.calls) == 1
+    )), lambda **msg: None)
+    assert len(llm.calls) == 2
     assert not llm.summarize_calls
 
 
@@ -93,17 +98,18 @@ def test_desktop_honors_exit_commands(config, action):
         {"action": "line", "text": action},
         {"action": "line", "text": "/say This must never be processed"},
     ), lambda **msg: None)
-    assert len(llm.calls) == 1
+    assert len(llm.calls) == 2  # opening + Hello; the line after exit stays unprocessed
+    assert "This must never be processed" not in str(llm.calls)
     assert bool(llm.summarize_calls) == (action == "/end")
 
 
 def test_desktop_stdin_eof_releases_microphone(config):
     app = NPCApp(config, llm=FakeLLM(), recorder=FakeRecorder(),
                  transcriber=FakeTranscriber(), speaker=FakeSpeaker())
-    run_session(app, commands({"action": "record"}), lambda **msg: None)
+    run_session(app, after_opening(app, commands({"action": "record"})), lambda **msg: None)
     assert not app._worker.is_alive()
     assert app.speaker.stopped == 1
-    assert len(app.llm.calls) == 1
+    assert len(app.llm.calls) == 2
 
 
 def test_desktop_rejects_bad_commands_and_keeps_session(config):
@@ -113,6 +119,28 @@ def test_desktop_rejects_bad_commands_and_keeps_session(config):
     run_session(app, io.StringIO(bad), lambda **msg: messages.append(msg))
     assert len([msg for msg in messages if msg["kind"] == "log"]) == 4
     assert not app._worker.is_alive()
+
+
+def test_desktop_attitude_commands_use_shared_engine_and_report_selected_npc(config, campaign):
+    (campaign / "characters").mkdir()
+    (campaign / "characters/smith.md").write_text("# Smith\nA smith.")
+    llm = FakeLLM()
+    llm.replies = ["Welcome, traveler.", "Move along, traveler."]
+    messages = []
+    app = NPCApp(config, llm=llm)
+    assert run_session(app, after_opening(app, commands(
+        {"action": "speak_npc", "npc": "smith", "attitude": "rude"},
+        {"action": "speak_npc", "npc": "smith", "attitude": "invalid"},
+        {"action": "shutdown", "summarize": False},
+    )), lambda **msg: messages.append(msg)) == 0
+    assert messages[0]["npc_id"] == "character"
+    assert {n["id"] for n in messages[0]["npcs"]} == {"character", "smith"}
+    assert any(m["kind"] == "npcs" and m["npc_id"] == "smith" for m in messages)
+    assert any("prise de parole refusée" in m.get("text", "") for m in messages)
+    assert len(llm.calls) == 2
+    assert "curt, gruff and blunt" in str(llm.calls[-1])
+    assert app.active.stem == "smith"
+    assert app.active.player_turns == 0
 
 
 def test_desktop_build_blocks_missing_llm(config, monkeypatch):

@@ -28,7 +28,7 @@ def server(config, campaign):
             server.publish(event)
 
     app = NPCApp(config, llm=FakeLLM(), speaker=FakeSpeaker(), on_event=on_event)
-    app.start()
+    app.start(greet=False)
     server = MobileServer(app, port=0)
     server.start()
     yield server
@@ -291,3 +291,124 @@ def test_new_gm_events_stay_out_of_player_serializer():
         assert event.dm_only
         assert event_to_message(event, "NPC") is None
     assert gm_event_to_message(events[0])["secret"] == "body"
+
+
+def test_gm_cards_and_secret_inspection_target_inactive_npc_without_unlocking(server):
+    slot = server.app.roster["smith"]
+    slot.path.write_text(
+        "# Smith\n- Scénario : Forge\n- Attitude : Méfiant\n"
+        "- Motivation : Protéger sa forge\n- Levier de négociation : Du charbon\n"
+        "- Cache : Une confidence de la forge.\n")
+    server.app.handle_line("/reload")
+    with client(server) as ws:
+        hello = recv(ws)
+        cards = until(ws, "gm_npc_list")["npcs"]
+        card = next(c for c in cards if c["id"] == "smith")
+        assert card == {"id": "smith", "name": "Smith", "active": False,
+                        "scenario": "Forge", "attitude": "Méfiant",
+                        "motivation": "Protéger sa forge", "negotiation": "Du charbon",
+                        "secret_count": 2}
+        assert slot.secrets.entries[0].body not in json.dumps(cards)
+        send(ws, type="get_npc_secrets", npc="smith")
+        response = until(ws, "gm_npc_secrets")
+        assert response["id"] == "smith"
+        assert response["secrets"] == [
+            {"body": "Une confidence de la forge.", "hint": "", "status": "local"},
+            {"body": "The smith hid it in his forge.", "hint": "the smith's key",
+             "status": "locked"}]
+        assert server.app.npc_name == hello["npc"]
+        assert not slot.secrets.entries[0].revealed
+        assert len(slot.history) == 0
+        assert not slot.ooc_notes
+        assert not server.app.llm.calls
+        # The same connection observes an edited card and an added NPC after reload.
+        slot.path.write_text("# Smith\n- Scénario : Updated\n## Secrets locaux\n- New clue.")
+        (slot.path.parent / "scout.md").write_text("# Scout\n- Scénario : Forest\n")
+        server.app.handle_line("/reload")
+        cards = until(ws, "gm_npc_list")["npcs"]
+        assert next(c for c in cards if c["id"] == "smith")["scenario"] == "Updated"
+        assert {c["id"] for c in cards} == {"character", "smith", "scout"}
+        send(ws, type="get_npc_secrets", npc="smith")
+        assert until(ws, "gm_npc_secrets")["secrets"][0]["body"] == "New clue."
+        # Reading a blocked secret on the phone must not expose it to a later model call.
+        assert server.app.switch_npc("smith")
+        drain(server.app)
+        assert server.app.submit_player_text("Where is the key?")
+        drain(server.app)
+        assert "The smith hid it in his forge." not in prompts(server.app)
+        assert not slot.secrets.entries[0].revealed
+
+
+def test_player_cannot_fetch_npc_secrets_or_receive_gm_cards(server):
+    server._authorize_gm = lambda req: req.headers.get("X-GM") == "yes"
+    with client(server) as ws:
+        assert recv(ws)["capabilities"]["secret_approval"] is False
+        server.app.handle_line("/reload")
+        send(ws, type="get_npc_secrets", npc="smith")
+        messages = []
+        while True:
+            message = recv(ws)
+            messages.append(message)
+            if message["type"] == "error":
+                break
+        assert message["message"] == "NPC secrets are unavailable for this connection"
+        send(ws, type="status")
+        while True:
+            message = recv(ws)
+            messages.append(message)
+            if message["type"] == "status":
+                break
+        assert not any(m["type"].startswith("gm_npc_") for m in messages)
+        assert "the smith's key" not in json.dumps(messages)
+        assert "scenario" not in json.dumps(messages)
+
+
+@pytest.mark.parametrize("npc", [None, [], {}, "../secrets", "SMITH", "unknown"])
+def test_secret_inspection_uses_exact_validated_npc_ids(server, npc):
+    with client(server) as ws:
+        send(ws, type="get_npc_secrets", npc=npc)
+        assert until(ws, "error")["message"] == "Unknown NPC"
+        send(ws, type="get_npc_secrets", npc="smith")
+        assert until(ws, "gm_npc_secrets")["name"] == "Smith"
+
+
+@pytest.mark.parametrize("attitude,expected", [
+    ("agacement", "Annoyance"), ("amusant", "Amusing"),
+    ("rude", "Rude"), ("complaisant", "Accommodating"),
+])
+def test_mobile_gm_buttons_target_npc_and_generate_one_styled_reply(server, attitude, expected):
+    with client(server) as ws:
+        cards = until(ws, "gm_npc_list")
+        assert [a["id"] for a in cards["speech_attitudes"]] == [
+            "agacement", "amusant", "rude", "complaisant"]
+        send(ws, type="speak_npc", npc="smith", attitude=attitude)
+        reply = until(ws, "npc_replied")
+        until(ws, "state")  # idle after playback
+        assert reply["npc"] == "Smith"
+        assert len(server.app.llm.calls) == 1
+        assert expected + ":" in server.app.llm.calls[0][1][-1]["content"]
+        assert "The smith hid it in his forge." not in prompts(server.app)
+        assert not server.app.active.secrets.revealed()
+        assert server.app.active.player_turns == 0
+
+
+def test_player_connections_cannot_issue_attitude_cues(server):
+    server._authorize_gm = lambda req: False
+    with client(server) as ws:
+        send(ws, type="speak_npc", npc="smith", attitude="complaisant")
+        assert until(ws, "error")["message"] == "NPC speech cues are unavailable for this connection"
+        assert server.app.active.stem == "character"
+        assert not server.app.llm.calls
+
+
+@pytest.mark.parametrize("values", [
+    {}, {"npc": "smith", "attitude": []}, {"npc": "smith", "attitude": "invalid"},
+    {"npc": "../secrets", "attitude": "rude"}, {"npc": [], "attitude": "rude"},
+])
+def test_bad_mobile_speech_cue_does_not_switch_and_connection_survives(server, values):
+    with client(server) as ws:
+        send(ws, type="speak_npc", **values)
+        assert until(ws, "error")["message"] == "NPC speech cue rejected"
+        assert server.app.active.stem == "character"
+        send(ws, type="speak_npc", npc="smith", attitude="amusant")
+        assert until(ws, "npc_replied")["npc"] == "Smith"

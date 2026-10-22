@@ -48,7 +48,7 @@ class PocketRuntime:
             from pocket_tts import TTSModel
         except ImportError as exc:
             raise RuntimeError("Pocket TTS manque : installez ttrpg-npc[pocket] "
-                               "ou relancez Lancer NPC.bat.") from exc
+                               "ou lancez uv sync --extra pocket.") from exc
 
         try:
             self.model = TTSModel.load_model(language=profile)

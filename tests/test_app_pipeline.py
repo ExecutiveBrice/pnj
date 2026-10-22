@@ -83,7 +83,7 @@ def app(config):
                  recorder=FakeRecorder(), speaker=FakeSpeaker(),
                  on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     yield app
     app._queue.put(None)
 
@@ -312,7 +312,7 @@ def test_broken_event_subscriber_does_not_kill_the_session(config):
         raise RuntimeError("overlay crashed")
 
     app = NPCApp(config, llm=FakeLLM(), on_event=explode)
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say hello")
     app._queue.join()
     app._queue.put(None)
@@ -355,7 +355,7 @@ def test_streaming_foreign_reply_never_reaches_tts(config):
     app = NPCApp(config, llm=llm, speaker=StreamingFakeSpeaker(),
                  on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say tala svenska!")
     drain(app)
     app._queue.put(None)
@@ -372,7 +372,7 @@ def test_streaming_mid_reply_language_flip_is_skipped_from_audio(config):
     app = NPCApp(config, llm=llm, speaker=StreamingFakeSpeaker(),
                  on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say hello")
     drain(app)
     app._queue.put(None)
@@ -448,7 +448,7 @@ def stream_app(config):
     app = NPCApp(config, llm=StreamingFakeLLM(), speaker=StreamingFakeSpeaker(),
                  on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     yield app
     app._queue.put(None)
 
@@ -488,7 +488,7 @@ def test_streaming_narration_mix_speaks_only_quoted_dialogue(config):
     app = NPCApp(config, llm=StreamingFakeLLM(chunks), speaker=StreamingFakeSpeaker(),
                  on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say give it to me")
     drain(app)
     app._queue.put(None)
@@ -502,7 +502,7 @@ def test_barge_in_mid_stream_records_only_what_was_heard(config):
     app = NPCApp(config, llm=StreamingFakeLLM(),
                  speaker=StreamingFakeSpeaker(cancel_after=1), on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say hello")
     drain(app)
     app._queue.put(None)
@@ -523,7 +523,7 @@ def test_server_rejecting_stream_falls_back_to_plain_chat(config):
     app = NPCApp(config, llm=NoStreamLLM(), speaker=StreamingFakeSpeaker(),
                  on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say hello")
     drain(app)
     app._queue.put(None)
@@ -537,7 +537,7 @@ def test_stream_false_in_config_uses_plain_chat(config):
     config.llm.stream = False
     app = NPCApp(config, llm=StreamingFakeLLM(), speaker=StreamingFakeSpeaker(),
                  on_event=lambda e: None)
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say hello")
     drain(app)
     app._queue.put(None)
@@ -562,7 +562,7 @@ def test_repeated_refusal_is_retried_before_audio_display_or_secret_handling(con
     app = NPCApp(config, llm=llm, speaker=speaker, on_event=events.append)
     app.events = events
     app.active.history.add_npc(_ARCH_REFUSAL)
-    app.start()
+    app.start(greet=False)
     try:
         app.handle_line("/say Et à toi, je peux te faire un câlin ?")
         drain(app)
@@ -602,11 +602,11 @@ def test_player_can_explicitly_request_an_exact_repeat(app):
 
 def test_shared_opening_that_diverges_keeps_streaming_without_retry(stream_app):
     stream_app.config.language = "fr"
-    stream_app.active.history.add_npc("Non. Le monolithe est une relique sacrée.")
-    stream_app.llm.chunks = ("Non. ", "Je préfère garder mes distances.")
+    stream_app.active.history.add_npc("Non, désolé. Le monolithe est une relique sacrée.")
+    stream_app.llm.chunks = ("Non, désolé. ", "Je préfère garder mes distances.")
     stream_app.handle_line("/say Et à toi, je peux te faire un câlin ?")
     drain(stream_app)
-    assert stream_app.speaker.spoken == ["Non.", "Je préfère garder mes distances."]
+    assert stream_app.speaker.spoken == ["Non, désolé.", "Je préfère garder mes distances."]
     assert stream_app.llm.calls == []
 
 
@@ -645,7 +645,7 @@ def test_separate_secret_routing_controls_requests_without_exposing_bodies(confi
     events = []
     app = NPCApp(config, llm=llm, speaker=StreamingFakeSpeaker(), on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     try:
         app.handle_line("/say Where is the key?" if selected else "/say Can I touch the monolith?")
         drain(app)
@@ -667,7 +667,7 @@ def test_checkpoint_every_n_turns(config):
     config.checkpoint_every_turns = 2
     events = []
     app = NPCApp(config, llm=FakeLLM(), on_event=events.append)
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say one")
     app.handle_line("/say two")
     app._queue.join()
@@ -781,7 +781,7 @@ def test_key_rumour_and_routed_question_never_approve_a_locked_secret(config):
     llm.replies = ["What have you heard?", "Tokk has a great deal to say.",
                    "Tell me why you seek it."]
     app = NPCApp(config, llm=llm, on_event=lambda e: None)
-    app.start()
+    app.start(greet=False)
     try:
         app.handle_line("/say I heard about a teleporter.")
         app.handle_line("/say Yes, a key, Tokk told me about it.")
@@ -884,7 +884,7 @@ def test_streaming_marker_split_across_chunks_is_scrubbed(config):
     app = NPCApp(config, llm=StreamingFakeLLM(chunks),
                  speaker=StreamingFakeSpeaker(), on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say what is under the altar?")
     drain(app)
     app._queue.put(None)
@@ -905,7 +905,7 @@ def test_barge_in_before_the_marker_sentence_drops_the_request(config):
                  speaker=StreamingFakeSpeaker(cancel_after=1),
                  on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say what is under the altar?")
     drain(app)
     app._queue.put(None)
@@ -959,7 +959,7 @@ def test_lore_reaches_prompt_and_budget_warning_fires_once(config, campaign):
     app = NPCApp(config, llm=FakeLLM(), speaker=FakeSpeaker(),
                  on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say hello")
     app.handle_line("/say again")
     drain(app)
@@ -982,7 +982,7 @@ def test_no_budget_warning_for_openai_backend(config, campaign):
     events = []
     app = NPCApp(config, llm=FakeLLM(), on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say hello")
     drain(app)
     app._queue.put(None)
@@ -1005,7 +1005,7 @@ def test_french_streaming_keeps_regional_speech(config):
     llm = StreamingFakeLLM(chunks=("Oui, je vous écoute. ", "Cela coûte septante pièces."))
     speaker = StreamingFakeSpeaker()
     app = NPCApp(config, llm=llm, speaker=speaker)
-    app.start()
+    app.start(greet=False)
     try:
         app.handle_line("/say Bonjour !")
         drain(app)

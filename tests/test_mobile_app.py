@@ -26,7 +26,7 @@ def test_text_and_cli_share_queue_and_pipeline(app):
     assert app.submit_player_text("  Bonjour  ")
     app.handle_line("/say Encore")
     assert not app.llm.calls  # nothing calls the LLM outside the worker
-    app.start()
+    app.start(greet=False)
     drain(app)
     assert [e.text for e in app.events if isinstance(e, PlayerSpoke)] == ["Bonjour", "Encore"]
     assert len(app.llm.calls) == 2
@@ -43,7 +43,7 @@ def test_text_rejects_empty_or_non_string(app, text):
 
 def test_player_cannot_execute_gm_commands(app):
     assert app.submit_player_text("/reveal teleporter-key")
-    app.start()
+    app.start(greet=False)
     drain(app)
     assert not app.active.secrets.get("teleporter-key").revealed
     assert not app.ooc_notes
@@ -56,10 +56,11 @@ def test_switches_are_serialized_even_back_to_initial_npc(app):
     assert app.switch_npc("character")
     assert app.submit_player_text("For Vess")
     assert app.npc_name == "Vess of the Glass Monolith"
-    app.start()
+    app.start(greet=False)
     drain(app)
     assert "A smith." in app.llm.calls[0][0]
-    assert "For Mordrek" not in str(app.llm.calls[1])
+    assert len(app.llm.calls) == 4  # two openings and two player replies
+    assert all("For Mordrek" not in str(call) for call in app.llm.calls[2:])
     assert app.npc_name == "Vess of the Glass Monolith"
 
 
@@ -73,7 +74,7 @@ def test_audio_uses_existing_transcription_pipeline_and_copies_samples(app):
     samples = np.full(16000, 8000, dtype=np.int16)
     assert app.submit_audio_clip(AudioClip(samples, 16000))
     samples.fill(0)  # must not mutate an already submitted utterance
-    app.start()
+    app.start(greet=False)
     drain(app)
     assert app.transcriber.calls == 1
     assert PlayerSpoke("who are you?") in app.events
@@ -128,7 +129,7 @@ def test_status_is_an_explicit_player_safe_snapshot(app):
 
 
 def test_submissions_after_shutdown_are_rejected(app):
-    app.start()
+    app.start(greet=False)
     app.shutdown(summarize=False)
     assert not app.submit_player_text("Too late")
     assert not app.switch_npc("mordrek")

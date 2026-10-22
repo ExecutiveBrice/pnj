@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 
 from .config import load_config
-from .events import State, StateChanged, format_event
+from .events import ConfigReloaded, NpcSwitched, State, StateChanged, format_event
 
 
 def prepare_models(config, emit) -> int:
@@ -89,7 +89,6 @@ def build_app(config, emit, *, microphone=True):
 def run_session(app, commands, emit) -> int:
     """Only this thread dispatches input; NPCApp serializes model work itself."""
     summarize = False
-    app.start()
     mobile = None
     original_on_event = app._on_event
     if app.config.mobile.enabled:
@@ -100,11 +99,6 @@ def run_session(app, commands, emit) -> int:
             mobile = MobileServer(app, app.config.mobile.port, app.config.mobile.listen)
             mobile.start()
 
-            def on_event(event):
-                original_on_event(event)
-                mobile.publish(event)
-
-            app._on_event = on_event
             factory = app._make_speaker
             if factory is not None:
                 factory.set_audio_observer(mobile.publish_audio)
@@ -120,7 +114,17 @@ def run_session(app, commands, emit) -> int:
                 mobile.stop()
             mobile = None
             emit(kind="log", text=f"Serveur mobile indisponible : {exc}")
-    emit(kind="ready", microphone=app.recorder is not None, npc=app.npc_name)
+    def on_event(event):
+        original_on_event(event)
+        if isinstance(event, (NpcSwitched, ConfigReloaded)):
+            emit(kind="npcs", npc_id=app.active.stem, **app.player_status())
+        if mobile is not None:
+            mobile.publish(event)
+
+    app._on_event = on_event
+    emit(kind="ready", microphone=app.recorder is not None,
+         npc_id=app.active.stem, **app.player_status())
+    app.start()
     try:
         for raw in commands:
             try:
@@ -135,6 +139,10 @@ def run_session(app, commands, emit) -> int:
                     app.on_ptt_press()
                 elif action == "release":
                     app.on_ptt_release()
+                elif action == "speak_npc":
+                    if not app.speak_npc(command.get("npc"), command.get("attitude")):
+                        raise ValueError("prise de parole refusée : PNJ ou attitude invalide, "
+                                         "session terminée ou enregistrement en cours")
                 elif action == "line":
                     line = command.get("text", "")
                     if not isinstance(line, str):

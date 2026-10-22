@@ -11,6 +11,8 @@ dist/
 # Personal campaign content (characters, logbooks, session transcripts).
 # Remove this line if you want to version your campaigns.
 campaigns/
-/.idea/inspectionProfiles/profiles_settings.xml
-/.idea/vcs.xml
-/.idea/workspace.xml
+.idea/
+*.onnx
+*.onnx.json
+/voix/
+/histoires/

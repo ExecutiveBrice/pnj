@@ -1,31 +1,24 @@
-"""The examples/ gallery must always load clean — it's the shop window."""
+"""The packaged templates produce a usable campaign without external files."""
 
-from pathlib import Path
-
-import pytest
-
+from npc.cli import init_campaign
 from npc.config import load_config
 from npc.roster import discover_character_files, load_slot
-
-EXAMPLES = sorted((Path(__file__).parent.parent / "examples").iterdir())
-
-
-@pytest.mark.parametrize("campaign", EXAMPLES, ids=lambda p: p.name)
-def test_example_campaign_loads_clean(campaign):
-    config = load_config(campaign)
-    refs = discover_character_files(campaign)
-    assert refs, f"{campaign.name} has no character files"
-    for ref in refs:
-        slot = load_slot(ref, config)
-        assert slot.secrets_error is None, slot.secrets_error
-        assert slot.lore_errors == [], slot.lore_errors
-        assert slot.name != slot.stem  # every sheet has a display-name heading
+from npc.session.prompt import build_system_prompt
 
 
-def test_gallery_shows_both_layouts():
-    names = [p.name for p in EXAMPLES]
-    assert "rusty-lantern" in names       # single legacy character.md
-    assert "glass-monolith" in names      # characters/ multi-NPC layout
-    assert any((p / "secrets.md").exists() or (p / "secrets").is_dir()
-               for p in EXAMPLES)
-    assert any((p / "lore").is_dir() for p in EXAMPLES)
+def test_template_campaign_loads_without_exposing_locked_secrets(tmp_path):
+    init_campaign(tmp_path)
+    config = load_config(tmp_path)
+    refs = discover_character_files(tmp_path)
+    assert len(refs) == 1
+    slot = load_slot(refs[0], config)
+    assert slot.name == "Vess of the Glass Monolith"
+    assert slot.secrets_error is None
+    assert slot.lore_errors == []
+    assert slot.secrets.locked()
+    prompt = build_system_prompt(
+        slot.character, config.adventure_file.read_text(encoding="utf-8"),
+        "", [], secrets=slot.secrets)
+    for secret in slot.secrets.locked():
+        assert secret.hint in prompt
+        assert secret.body not in prompt

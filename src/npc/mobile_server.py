@@ -24,7 +24,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from .audio.recorder import AudioClip
-from .events import Event, SecretDisclosuresChanged
+from .attitudes import SPEECH_ATTITUDES
+from .events import ConfigReloaded, Event, NpcSwitched, SecretDisclosuresChanged, SecretResolved
 from .mobile_protocol import PROTOCOL_VERSION, encode, event_to_message, gm_event_to_message
 from .voice_studio import StudioCancelled, VoiceStudio
 
@@ -107,6 +108,9 @@ class MobileServer:
 
     def publish(self, event: Event) -> None:
         if self.app.config.mobile.secret_approval:
+            if type(event) in (ConfigReloaded, NpcSwitched, SecretDisclosuresChanged,
+                              SecretResolved):
+                self._publish(_GMFrames((encode(self._npc_details_snapshot()),)))
             if type(event) is SecretDisclosuresChanged:
                 self._publish(_GMFrames((encode(self._disclosure_snapshot()),)))
             elif (message := gm_event_to_message(event)) is not None:
@@ -214,12 +218,19 @@ class MobileServer:
         if request.path == "/":
             body = files("npc").joinpath("static/mobile.html").read_bytes()
             return self._http_response(connection, body, "text/html; charset=utf-8")
+        if request.path in ("/mobile-sw.js", "/mobile-offline.js"):
+            body = files("npc").joinpath("static" + request.path).read_bytes()
+            return self._http_response(connection, body, "text/javascript; charset=utf-8")
         match = re.fullmatch(r"/studio/audio/([a-f0-9]{32})\.wav", request.path)
         if match and (path := self.studio.audio_path(match[1])) is not None:
             # Safari and native players use byte ranges to seek/replay WAV files.
             size = path.stat().st_size
             start, end, status = 0, size - 1, HTTPStatus.OK
-            headers = {"Accept-Ranges": "bytes"}
+            # The standalone web companion downloads WAVs into IndexedDB.
+            # Keep authorization above this route; credentials are never enabled.
+            headers = {"Accept-Ranges": "bytes",
+                       "Access-Control-Allow-Origin": "*",
+                       "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges"}
             range_header = request.headers.get("Range")
             if range_header is not None:
                 selected = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
@@ -282,6 +293,7 @@ class MobileServer:
         self._clients[connection] = outbox
         if gm:
             self._gm_clients.add(connection)
+            outbox.put_nowait((encode(self._npc_details_snapshot()),))
         sender = asyncio.create_task(self._send(connection, outbox))
 
         async def receive():
@@ -294,6 +306,7 @@ class MobileServer:
                     if response["type"] == "status":
                         frames += (encode({"type": "npc_list", "npcs": response["npcs"]}),)
                         if gm:
+                            frames += (encode(self._npc_details_snapshot()),)
                             frames += (encode(self._disclosure_snapshot()),)
                     if not self._enqueue(connection, outbox, frames):
                         return
@@ -316,6 +329,11 @@ class MobileServer:
 
     def _disclosure_snapshot(self) -> dict:
         return {"type": "secret_disclosure_list", "requests": self.app.secret_disclosures()}
+
+    def _npc_details_snapshot(self) -> dict:
+        return {"type": "gm_npc_list", "npcs": self.app.gm_npc_details(),
+                "speech_attitudes": [{"id": key, "label": label}
+                                     for key, label in SPEECH_ATTITUDES.items()]}
 
     def _start_studio(self, connection, outbox, message):
         if self._studio_job is not None:
@@ -415,6 +433,13 @@ class MobileServer:
                 return None
             if kind == "status":
                 return {"type": "status", **self.app.player_status()}
+            if kind == "get_npc_secrets":
+                if not gm:
+                    return error("NPC secrets are unavailable for this connection")
+                details = self.app.gm_npc_secrets(message.get("npc"))
+                if details is None:
+                    return error("Unknown NPC")
+                return {"type": "gm_npc_secrets", **details}
             if kind == "studio_list":
                 return self.studio.catalog()
             if kind == "studio_cancel":
@@ -430,6 +455,13 @@ class MobileServer:
                 return self._start_studio(connection, outbox, message)
             # Changing NPC, submitting text or interrupting discards unfinished audio.
             upload.data = None
+            if kind == "speak_npc":
+                if not gm:
+                    return error("NPC speech cues are unavailable for this connection")
+                if not await asyncio.to_thread(self.app.speak_npc,
+                                               message.get("npc"), message.get("attitude")):
+                    return error("NPC speech cue rejected")
+                return None
             if kind == "resolve_secret_disclosure":
                 if not gm:
                     return error("Secret approval is unavailable for this connection")

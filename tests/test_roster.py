@@ -7,6 +7,7 @@ from npc.roster import (
     CharacterSlot,
     discover_character_files,
     load_slot,
+    read_character_details,
     read_display_name,
     render_turns,
     resolve_npc,
@@ -64,6 +65,37 @@ def test_empty_campaign_gives_empty_roster(tmp_path):
 def test_display_name_falls_back_to_stem():
     assert read_display_name("# Korval the Red\n\nText.", "korval") == "Korval the Red"
     assert read_display_name("No heading here.", "korval") == "korval"
+
+
+def test_mobile_details_only_read_explicit_fields_and_local_secrets():
+    details = read_character_details(
+        "# Gertrude\n- Scénario : Village\n- Attitude : Fière\n"
+        "- Motivation : Du grain\n- Levier de négociation : Une promesse\n"
+        "- Cache : Elle a peur de perdre sa voix.\n"
+        "- Secret : Voir le fichier soumis au MJ.\n"
+        "## Secrets locaux\n- Une confidence.\n  Sa condition.\n"
+        "- Motivation : Un texte secret, pas un attribut.\n"
+        "## Connaissances\n- Une information publique.\n")
+    assert (details.scenario, details.attitude, details.motivation, details.negotiation) == (
+        "Village", "Fière", "Du grain", "Une promesse")
+    assert details.local_secrets == (
+        "Elle a peur de perdre sa voix.", "Une confidence.\nSa condition.",
+        "Motivation : Un texte secret, pas un attribut.")
+    assert not read_character_details("# Legacy\nNo metadata.").local_secrets
+
+
+def test_mobile_details_reload_without_replacing_conversation(tmp_path):
+    path = tmp_path / "character.md"
+    write(path, "# Vess\n- Scénario : Old\n- Cache : First confidence.")
+    config = Config(campaign_dir=tmp_path)
+    slot = load_slot(discover_character_files(tmp_path)[0], config)
+    slot.history.add_player("Our conversation")
+    assert slot.details.scenario == "Old"
+    write(path, "# Vess\n- Scénario : New\n## Secrets\n- Second confidence.")
+    slot.refresh(config)
+    assert slot.details.scenario == "New"
+    assert slot.details.local_secrets == ("Second confidence.",)
+    assert len(slot.history) == 1
 
 
 def test_load_slot_reads_voice_mapping(tmp_path):

@@ -1,4 +1,4 @@
-"""Command-line entrypoint: init / run / doctor / transcribe / say."""
+"""Command-line entrypoint for campaigns and standalone speech generation."""
 
 from __future__ import annotations
 
@@ -227,6 +227,23 @@ def cmd_gui(args) -> int:
     return main(args.campaign)
 
 
+def cmd_voice_design(args) -> int:
+    from .voice_design import generate_voice_file
+
+    try:
+        target = generate_voice_file(
+            Path(args.spec), model=args.model, device=args.device,
+            overwrite=args.force, progress=print)
+    except Exception as exc:
+        print(f"Génération vocale impossible : {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("Génération vocale annulée.", file=sys.stderr)
+        return 130
+    print(f"Audio prêt à écouter : {target}")
+    return 0
+
+
 def cmd_run(args) -> int:
     from .app import NPCApp
     from .doctor import print_report, run_checks
@@ -239,7 +256,8 @@ def cmd_run(args) -> int:
     if not discover_character_files(config.campaign_dir):
         where = ("the current directory" if args.campaign == "."
                  else str(config.campaign_dir))
-        print(f"{where} is not a campaign (no character.md or characters/*.md).\n"
+        print(f"{where} is not a campaign "
+              "(no character.md, characters/*.md or zones/*/characters/*.md).\n"
               "Point at one (npc run campaigns/mygame) or create one: "
               "npc init campaigns/mygame", file=sys.stderr)
         return 1
@@ -339,7 +357,6 @@ def cmd_run(args) -> int:
             overlay = None
             print(f"! overlay disabled: {e}")
 
-    app.start()
     if mobile_enabled:
         from .mobile_server import MobileServer
 
@@ -358,6 +375,7 @@ def cmd_run(args) -> int:
             mobile = None
             print(f"! mobile server disabled: {e}")
     print("\n" + quickstart(app, config, voice_on=recorder is not None) + "\n")
+    app.start()
 
     action = "quit"
     try:
@@ -566,6 +584,18 @@ def _ptt_callbacks(app, session, typing_key: bool, tap_mode: bool = False):
     return on_press, on_release
 
 
+def cmd_import_campaign(args) -> int:
+    from .campaign_import import import_campaign
+
+    try:
+        count = import_campaign(Path(args.source), Path(args.campaign))
+    except (OSError, ValueError, KeyError, IndexError) as exc:
+        print(f"Import impossible : {exc}", file=sys.stderr)
+        return 1
+    print(f"{count} PNJ importés dans {Path(args.campaign).resolve()}")
+    return 0
+
+
 def main(argv=None) -> int:
     # Swedish player lines and ⚑/🔒 micro-copy must survive any locale:
     # force UTF-8 on the terminal streams (replace, never crash a session
@@ -610,6 +640,19 @@ def main(argv=None) -> int:
     p.add_argument("file", help="16-bit PCM wav file")
     p = add("say", cmd_say, "debug: speak a line with the NPC voice")
     p.add_argument("text", help="text to speak")
+    p = sub.add_parser("voice-design",
+                       help="generate a WAV beside a TOML/JSON voice specification")
+    p.add_argument("spec", help="TOML/JSON file containing text, instruct and language")
+    p.add_argument("--model", default="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+                   help="Hugging Face model ID or local model directory")
+    p.add_argument("--device", default="auto", help="auto (default), cpu, cuda or cuda:N")
+    p.add_argument("--force", action="store_true", help="replace an existing WAV")
+    p.set_defaults(func=cmd_voice_design)
+
+    p = sub.add_parser("import-campaign", help="importer les zones de CampagneBaston")
+    p.add_argument("source", help="dépôt source CampagneBaston (lecture seule)")
+    p.add_argument("campaign", help="nouveau dossier de campagne à créer")
+    p.set_defaults(func=cmd_import_campaign)
 
     args = parser.parse_args(argv)
     try:

@@ -6,6 +6,7 @@ import queue
 from pathlib import Path
 
 from .desktop import DesktopProcess
+from .attitudes import SPEECH_ATTITUDES
 from .languages import LANGUAGES
 
 
@@ -143,6 +144,20 @@ class DesktopWindow:
                                 command=lambda line=command: self.send_line(line))
             button.pack(side="left", padx=(0, 4))
             self.shortcuts.append(button)
+        speech = ttk.LabelFrame(composer, text="Faire parler un PNJ — pour cette réplique", padding=8)
+        speech.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(10, 0))
+        self.speech_targets = {}
+        self.speech_target = tk.StringVar()
+        self.speech_picker = ttk.Combobox(speech, textvariable=self.speech_target,
+                                         state="disabled", width=24)
+        self.speech_picker.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        speech.columnconfigure(0, weight=1)
+        self.speech_buttons = []
+        for column, (attitude, label) in enumerate(SPEECH_ATTITUDES.items(), start=1):
+            button = ttk.Button(speech, text=label,
+                                command=lambda tone=attitude: self.speak_npc(tone))
+            button.grid(row=0, column=column, sticky="ew", padx=(0, 4))
+            self.speech_buttons.append(button)
         ttk.Label(body, text="Ollama doit être installé et lancé. Choisissez la langue avant la session. "
                   "Micro : cliquez pour enregistrer, puis pour envoyer.",
                   style="Subtitle.TLabel", wraplength=820).pack(
@@ -184,6 +199,23 @@ class DesktopWindow:
         self.record_button.configure(state="normal" if live and self.microphone else "disabled",
                                      text="Envoyer l’enregistrement" if self.recording
                                      else "Enregistrer")
+        can_speak = live and not self.recording and bool(self.speech_targets)
+        self.speech_picker.configure(state="readonly" if can_speak else "disabled")
+        for button in self.speech_buttons:
+            button.configure(state="normal" if can_speak else "disabled")
+
+    def set_speech_npcs(self, message):
+        self.speech_targets = {f"{npc['name']} ({npc['id']})": npc["id"]
+                               for npc in message.get("npcs", [])}
+        self.speech_picker.configure(values=tuple(self.speech_targets))
+        selected = next((label for label, npc_id in self.speech_targets.items()
+                         if npc_id == message.get("npc_id")), "")
+        self.speech_target.set(selected)
+
+    def speak_npc(self, attitude):
+        npc_id = self.speech_targets.get(self.speech_target.get())
+        if self.ready and not self.stopping and not self.recording and npc_id:
+            self.send("speak_npc", npc=npc_id, attitude=attitude)
 
     def refresh_languages(self):
         from .roster import discover_character_files, read_display_name
@@ -352,7 +384,8 @@ class DesktopWindow:
         path = Path(self.path.get()).expanduser()
         try:
             if not path.is_dir() or not discover_character_files(path):
-                raise ValueError("Choisissez une campagne contenant character.md ou characters/*.md.")
+                raise ValueError("Choisissez une campagne contenant character.md, characters/*.md "
+                                 "ou zones/*/characters/*.md.")
             load_config(path)  # report invalid TOML before launching a process
             self.engine.start(path, prepare=prepare, microphone=self.use_microphone.get())
         except Exception as exc:
@@ -448,10 +481,13 @@ class DesktopWindow:
                 self.ready = True
                 self.microphone = message["microphone"]
                 self.status.set(f"Session active — {message['npc']}")
+                self.set_speech_npcs(message)
                 if not self.microphone:
                     self.append("Saisie disponible. Pour activer le micro : préparez les modèles, "
                                 "vérifiez les autorisations système et redémarrez la session.")
                 self.entry.focus_set()
+            elif kind == "npcs":
+                self.set_speech_npcs(message)
             elif kind == "state" and not self.stopping:
                 state = message["state"]
                 self.recording = state == "recording"
@@ -463,6 +499,7 @@ class DesktopWindow:
             elif kind == "exit":
                 self.engine.acknowledge_exit()
                 self.ready = self.microphone = self.recording = self.stopping = False
+                self.set_speech_npcs({})
                 self.status.set("Écoute terminée" if self.testing_voice and message["code"] == 0
                                 else "Préparation terminée" if self.preparing and message["code"] == 0
                                 else "Session terminée" if message["code"] == 0

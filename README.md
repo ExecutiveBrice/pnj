@@ -1,596 +1,192 @@
-# npc — an offline AI NPC for your game table
+# NPC — personnages de jeu de rôle à voix haute
 
-[![PyPI](https://img.shields.io/pypi/v/ttrpg-npc)](https://pypi.org/project/ttrpg-npc/)
-[![vibe coded](https://img.shields.io/badge/vibe_coded-%E2%9C%A8-ff69b4?style=flat-square)](https://en.wikipedia.org/wiki/Vibe_coding)
-[![coded with Claude](https://img.shields.io/badge/coded_with-Claude_Code-CC785C?style=flat-square&logo=anthropic)](https://claude.ai/code)
-[![license: AGPL v3](https://img.shields.io/badge/license-AGPL_v3-blue?style=flat-square)](LICENSE)
+NPC fait parler des personnages de jeu de rôle avec des modèles locaux :
+Whisper transcrit le joueur, un modèle servi par Ollama ou une API compatible
+OpenAI produit la réponse, puis Piper, Pocket TTS ou Qwen3-TTS la prononce.
+L'interface de bureau, la console et le compagnon mobile utilisent le même moteur.
+Les modèles doivent être téléchargés avant de fonctionner hors ligne.
 
-**Hold a button, talk to an NPC, and it talks back — in character, out loud,
-with no cloud in sight.**
+## Installation et lancement
 
-![Demo: a spoken exchange with an NPC, including a GM-gated secret reveal](docs/demo.gif)
+Python 3.11 ou supérieur et `uv` sont nécessaires. Depuis ce dépôt :
 
-🔊 *Hear the voice: [docs/samples/vess-greeting.mp3](docs/samples/vess-greeting.mp3)* ·
-🖥️ *[The table overlay](docs/overlay.png)* ·
-🎲 *Try it now: `uv run npc run examples/rusty-lantern` — see the
-[gallery](#example-campaigns)*
-
-`npc` is a terminal program for game masters running tabletop RPGs like
-[Numenera](https://numenera.com). You describe an NPC in a markdown file, start
-a session, and hand your players a voice: hold the push-to-talk key, speak as a
-player in their language, and the NPC answers in the configured language
-(English or French, including Swiss, Canadian/Quebec and Belgian variants), staying true to its personality, knowledge, and secrets. Between
-sessions the NPC keeps a logbook, so it remembers what your party did last time.
-
-Everything runs **locally on your own machine**. After the one-time model
-downloads, no internet connection is used — your campaign never leaves the table.
-
-## How it works
-
-```mermaid
-flowchart LR
-    A["🔘 Hold key<br>(spacebar / USB button)"] --> B["🎤 Record<br>sounddevice"]
-    B --> C["📝 Speech-to-text<br>faster-whisper<br>(sv/en auto-detect)"]
-    C --> D["🧠 Local LLM<br>Ollama<br>+ character sheet<br>+ logbook"]
-    D --> E["🔊 Text-to-speech<br>Piper (Alba, en_GB)"]
+```sh
+uv sync --frozen --group dev
+uv run npc init campaigns/demo
+uv run npc doctor --fix campaigns/demo
+uv run npc gui campaigns/demo
 ```
 
-Two channels, one terminal:
+`doctor` vérifie les services locaux, les modèles, l'audio et la campagne.
+Le modèle de dialogue par défaut est `qwen2.5:7b-instruct` sur
+`http://localhost:11434` ; Ollama doit être démarré pour les dialogues.
+Piper utilise par défaut les voix de `~/.local/share/npc/voices/`.
+Selon le système, PortAudio et Tk doivent aussi être installés pour le son et
+l'interface de bureau. La configuration complète est commentée dans
+[src/npc/templates/config.toml](src/npc/templates/config.toml).
 
-| Input | Meaning |
-|---|---|
-| **Voice** (hold the push-to-talk key) | Always **in-character player dialogue** — the NPC hears a player speaking to it |
-| **Typed text** at the `gm>` prompt | Always an **out-of-character instruction** to the underlying LLM — *"be more hostile"*, *"you just saw them steal your idol"* |
+Pour utiliser Pocket ou Qwen, installer l'option correspondante puis régler
+`[tts] backend` dans le `config.toml` de la campagne :
 
-This separation is absolute by design: the LLM can never mistake table chatter
-for stage direction, and your players can never "prompt-inject" the NPC by
-talking to it.
-
-## Desktop interface (Windows 11 / macOS / Linux)
-
-The native Python desktop interface can create/open campaigns, download the
-configured models, start/stop a session, send player dialogue or GM notes,
-and record the microphone with an on-screen button. It runs the Python engine
-in a separate process so model loading and generation do not block the window.
-It does not require WSL or the Linux global hotkey.
-
-Install Python 3.12 **with Tcl/Tk** (the python.org installer includes it),
-[uv](https://docs.astral.sh/uv/getting-started/installation/), and
-[Ollama](https://ollama.com/download). Start Ollama, then from this clone:
-
-```bash
-uv run --python 3.12 --frozen npc gui
-# Optional: open a campaign immediately
-uv run --python 3.12 --frozen npc gui examples/rusty-lantern
+```sh
+uv sync --frozen --group dev --extra pocket
+# ou
+uv sync --frozen --group dev --extra qwen
 ```
 
-Alternatively, double-click **Lancer NPC.bat** on Windows or
-**Lancer NPC.command** on macOS. These launchers use uv to install the locked
-dependencies on first launch; internet is required for that setup. They are
-source launchers, not standalone .exe/.app bundles. After an installed-package
-setup, `npc-gui` also opens the window without a console on Windows.
+Les options des dépendances vocales dépendent de la version de Python et de la
+plateforme ; leurs contraintes sont définies dans `pyproject.toml`.
 
-The Windows launcher detects NVIDIA GPUs with `nvidia-smi` and automatically
-enables the CUDA dependencies for Whisper. The first GPU launch downloads these
-additional libraries. To enable them from a terminal, place `--extra cuda`
-before `npc`: `uv run --python 3.12 --frozen --extra cuda npc gui`.
+En console : `uv run npc run campaigns/demo`. Le push-to-talk global utilise
+evdev sous Linux ; le bouton d'enregistrement de l'interface de bureau est
+l'entrée micro sur Windows et macOS. `/say Bonjour` permet de dialoguer au clavier.
+Une ligne sans commande donne une consigne au MJ. `/npc` liste les personnages,
+`/npc <nom ou identifiant>` en sélectionne un, `/reload` relit les fichiers,
+`/save` résume la session, `/end` termine en sauvegardant et `/quit` termine sans
+résumé final. Les transcriptions sont écrites au fil des échanges.
 
-In the window, choose/create a campaign, click **Préparer les modèles**, then
-**Démarrer**. Preparation downloads Whisper, the configured Ollama model and
-Piper voices; external API backends still require loading their model in their
-own app. Use **Parole du joueur** for dialogue, **Note du MJ** for instructions,
-or **Commande** for `/npc name`, `/save`, etc. Click **Enregistrer**, speak,
-then click **Envoyer l’enregistrement**. Allow microphone access for Python
-in your OS settings. This button works independently of `[hotkey]` settings.
-On Windows and macOS, `npc doctor` and `npc run` report the Linux-only global
-hotkey as `[SKIP]`. Terminal sessions still support `/say` and mobile voice input;
-use `npc gui` to record with the PC microphone.
-**Terminer et mémoriser** waits for pending turns and writes the final summary.
-**Forcer l’arrêt** can interrupt startup, downloads, or shutdown; it cannot
-guarantee a final summary.
+À l'ouverture de la session et à chaque sélection d'un PNJ, celui-ci prend la
+parole avec une courte phrase d'accueil générée pour l'occasion. Elle tient
+compte de sa fiche, du lore, de son journal, des consignes MJ et des échanges
+de la session. Revenir sur un personnage (ou le sélectionner à nouveau) produit
+un nouvel accueil, avec sa voix et sa langue, sans compter comme un tour joueur.
 
-Use **Langue des personnages** before starting: choose the campaign default or
-an individual character, then select English or French (France, Switzerland,
-Canada/Quebec, Belgium). Choices are saved in the campaign's `config.toml`.
-**Suivre la campagne** removes an individual override. Click **Préparer les modèles**
-after a change to download missing voices. French defaults to `fr_FR-siwis-medium`;
-explicit `[tts] voice` and `[tts.voices]` settings take precedence. Regional
-choices guide vocabulary and expressions; pronunciation depends on the voice model.
+Dans l’interface de bureau, la zone **Faire parler un PNJ** permet de choisir
+un personnage et de déclencher une réplique avec l’un des quatre boutons :
+**Agacement**, **Amusant**, **Rude**, **Complaisant**. La réplique réagit à la
+situation et aux derniers échanges ; l’attitude choisie vaut pour cette seule
+prise de parole. Elle conserve la voix, la langue, les objectifs et les limites
+du PNJ, sans compter comme un tour joueur ni modifier ses consignes permanentes.
+Une commande reçue pendant un échange attend son tour ; un enregistrement en
+cours doit être terminé avant de déclencher cette prise de parole.
 
-### Pocket TTS : voix françaises et lecture progressive
+## Campagnes
 
-Le lanceur Windows **Lancer NPC.bat** installe aussi Pocket TTS, avec PyTorch
-sur CPU. Pour lancer depuis un terminal :
+Les campagnes sont des dossiers indépendants de fichiers Markdown et TOML.
+`campaigns/` est ignoré par Git pour conserver les parties hors du code source.
+Ouvrir une campagne existante avec `uv run npc gui /chemin/vers/campagne`.
 
-```powershell
-uv run --python 3.12 --locked --extra pocket --extra qwen --extra cuda npc gui
+Trois dispositions peuvent coexister :
+
+| Disposition | Fiches | Contexte de référence | Secrets et mémoire |
+| --- | --- | --- | --- |
+| Un PNJ | `character.md` | `lore/*.{md,txt,pdf}` | `secrets.md`, `logbook.md` |
+| Plusieurs PNJ | `characters/<id>.md` | `lore/<id>/` | `secrets/<id>.md`, `logbooks/<id>.md` |
+| Zones | `zones/<zone>/characters/<id>.md` | `zones/<zone>/lore.md` et `lore/<id>/` dans cette zone | `secrets/<id>.md`, `logbooks/<id>.md` dans cette zone |
+
+`adventure.md` contient les consignes communes et entre dans les prompts de tous
+les PNJ. Les scénarios réservés au MJ doivent rester dans d'autres dossiers.
+La découverte ne charge pas récursivement tous les documents de la campagne.
+Chaque PNJ garde son historique, ses notes, ses secrets et son journal propres.
+Un identifiant de zone tel que `village/garde` s'écrit entre guillemets dans les
+correspondances TOML de voix ou de langue.
+
+Les secrets bloqués ne transmettent que leur `hint:` au modèle. Le MJ autorise
+la révélation avec `/yes`, la refuse pour la session avec `/no` ou la reporte
+avec `/later`. Le format complet est dans
+[src/npc/templates/secrets.md](src/npc/templates/secrets.md).
+
+`import-campaign SOURCE DESTINATION` est un adaptateur spécifique aux anciens
+fichiers de CampagneBaston. Il exige une destination neuve ou vide. Une campagne
+qui possède déjà `zones/*/characters/*.md` s'ouvre directement.
+
+## Mobile et création de voix
+
+`uv run npc run campaigns/demo --mobile` active le compagnon à
+`http://127.0.0.1:8766/` ; son API WebSocket utilise `/ws`.
+Le studio enregistre les profils et aperçus vocaux dans `voix/` de la campagne.
+Les récits sont déposés dans `histoires/`, avec leur texte Markdown, leur WAV et
+leurs métadonnées JSON. Les anciennes bibliothèques `voice_studio/` restent lisibles.
+Les WAV déposés directement dans `histoires/` apparaissent aussi dans la bibliothèque,
+avec le texte du fichier `.md` de même nom lorsqu'il existe, sans charger de modèle.
+
+Dans **Vos histoires**, toucher **Conserver hors ligne** pendant la connexion au
+PC copie le WAV et ses informations sur le téléphone. Attendre la mention
+**Disponible hors ligne sur ce téléphone** avant de se déconnecter : l'écoute
+utilise alors la copie locale, même si le PC est éteint. **Retirer la copie hors
+ligne** libère l'espace du téléphone. Les copies sont séparées par campagne ;
+une histoire retirée du PC reste écoutable tant que sa copie locale est conservée.
+Le navigateur peut supprimer ces données si son stockage est effacé ou saturé.
+
+Sur l'adresse HTTP du réseau local, garder la page ouverte après le téléchargement.
+Pour pouvoir fermer puis rouvrir la page sans réseau, servir le compagnon via
+une adresse **HTTPS** de confiance (par exemple avec un proxy local prenant aussi
+en charge `/ws`), puis ouvrir cette adresse en ligne une première fois. Le lecteur
+prépare alors la réouverture hors ligne et l'indique à l'écran. Le navigateur exige
+HTTPS pour cette fonction, sauf sur localhost. Toujours réutiliser la même adresse,
+le même port et le même navigateur pour retrouver les copies. Le lien
+**Télécharger l'audio** permet aussi de conserver le WAV dans les fichiers du
+téléphone pour une écoute dans un lecteur audio, y compris avec un accès HTTP.
+
+Le compagnon est par défaut une télécommande MJ autorisée à approuver les
+secrets (`mobile.secret_approval = true`). Utiliser `false` pour les clients
+joueurs. L'accès réseau est sans authentification par défaut : réserver l'écoute
+LAN à un réseau de confiance, surtout en mode MJ.
+
+L’onglet **PNJ · MJ** présente chaque personnage, même inactif : scénario,
+attitude, motivation, levier de négociation et nombre de secrets. Une recherche
+filtre les noms et scénarios. **Voir les secrets** charge leurs textes pour le
+MJ ; cette consultation ne sélectionne pas le PNJ et n’autorise aucune révélation.
+Les mêmes quatre boutons **Agacement**, **Amusant**, **Rude**, **Complaisant**
+sont disponibles directement sur chaque fiche et sélectionnent le PNJ avec une
+seule réplique dans ce ton. Cette télécommande est réservée aux connexions MJ.
+Les attributs se renseignent directement dans chaque fiche Markdown :
+
+```markdown
+- Scénario : Village : la révolte des poules.
+- Attitude : Fière, juste.
+- Motivation : Obtenir du bon grain et un poulailler réparé.
+- Levier de négociation : Une promesse précise devant témoin.
 ```
 
-Dans **Voix**, sélectionnez **Pocket TTS**. Le personnage sélectionné dans
-**Langue des personnages** détermine à qui affecter la voix : campagne par
-défaut ou personnage individuel. Choisissez `estelle`, `marius`, `javert`,
-`jean`, `alba` ou `anna`, puis **Enregistrer**. **Écouter cette voix** lance
-un extrait sans charger Ollama ni Whisper. Les choix sont enregistrés dans
-le `config.toml` de la campagne :
+Le compteur additionne les confidences de la fiche (`- Cache : ...` ou les
+puces sous `## Secrets` / `## Secrets locaux`) et les entrées de son fichier
+de secrets soumis au MJ. Garder chaque confidence sur une puce ; les lignes
+de suite indentées sont acceptées sous ces sections. Les confidences restent
+connues du PNJ selon les conditions de sa fiche ; les secrets bloqués restent
+absents des prompts jusqu’à autorisation. Les attributs manquants sont affichés
+« Non renseigné ». `/reload` relit les fichiers ; **Actualiser les fiches**
+resynchronise l’affichage mobile. Ces informations sont réservées aux connexions
+MJ et ne sont pas conservées dans les copies hors ligne.
 
-```toml
-[tts]
-backend = "pocket"
-model = "french"
-voice = "estelle"
+`--overlay` active l'affichage OBS sur `http://127.0.0.1:8765/`.
+L'overlay et le compagnon ont des règles d'exposition distinctes ; voir
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
-[tts.voices]
-aubergiste = "marius"  # characters/aubergiste.md
-garde = "javert"
+Pour créer un WAV autonome à partir d'une description de voix :
+
+```sh
+uv run npc voice-design /chemin/vers/campagne/voix/conteur.toml
 ```
 
-Cliquez **Préparer les modèles** une première fois avec Internet, puis
-**Démarrer**. Un seul modèle CPU est partagé entre les personnages ; leurs
-voix sont préchargées et le modèle est préchauffé silencieusement. Pendant
-une réponse, les blocs audio sont lus dès leur génération et peuvent être
-interrompus par l'enregistrement suivant. Le délai du LLM et de la transcription
-s'ajoute au délai vocal. Le PCM à 24 kHz peut également être envoyé au mode mobile.
+Cette commande nécessite l'option `qwen` et crée le WAV à côté du TOML.
+`--force` autorise le remplacement d'un WAV existant. Les descriptions `conteur.toml` et `troll.toml` et leurs aperçus sont désormais
+dans `/Users/brice/WebstormProjects/CampagneBaston/voix/`. Les créations appartiennent
+à la campagne ; le projet moteur ne contient plus de dossier `tools/voice_design/`.
 
-`french` privilégie la réactivité ; `french_24l` est disponible dans la configuration
-mais plus lourd. `english` est un autre profil possible : le profil vocal ne
-change pas automatiquement avec la langue de dialogue. Les variantes régionales
-agissent sur les répliques, sans garantir un accent particulier. Cette intégration
-utilise les voix prédéfinies, sans clonage ni compte Hugging Face.
+## Développement
 
-Les campagnes existantes restent sur Piper. Changer de moteur depuis l'interface
-conserve les affectations de chaque moteur dans `[tts.voice_presets.*]` pour les
-retrouver au retour. La démo indépendante `Tester Pocket TTS.bat` reste disponible.
-
-### Qwen3-TTS VoiceDesign : studio vocal sur mobile
-
-Les trois moteurs se trouvent côte à côte dans `src/npc/engines/` : `piper.py`,
-`pocket.py` et `qwen.py`. Les outils de mesure Pocket sont dans `tools/pocket_tts/` ;
-le dossier `experiments` a été retiré. Le sélecteur **Voix** propose également
-**Qwen3-TTS VoiceDesign** ; le champ de voix contient alors une description libre.
-Les lanceurs installent les dépendances Pocket et Qwen. Installation manuelle :
-
-```powershell
-uv sync --python 3.12 --locked --extra pocket --extra qwen
-```
-
-Activez le compagnon mobile dans le `config.toml` de la campagne :
-
-```toml
-[mobile]
-enabled = true
-listen = "0.0.0.0"
-port = 8766
-```
-
-Après **Démarrer** dans l’interface PC (ou `npc run <campagne> --mobile`), ouvrez
-`http://ADRESSE_DU_PC:8766/` sur le téléphone connecté au même réseau.
-Le studio permet de décrire une voix et d’en écouter un aperçu, de lire un texte
-sans le réécrire, ou de faire rédiger une histoire depuis une idée par le LLM local
-puis de l’écouter. Les voix et récits restent disponibles dans la bibliothèque,
-avec lecture, téléchargement WAV et annulation. Le studio utilise Qwen même si
-les conversations PNJ restent sur Piper ou Pocket.
-
-Le premier usage télécharge le modèle VoiceDesign depuis Hugging Face ; ensuite
-les poids en cache fonctionnent localement. Ce dépôt configure PyTorch CPU :
-`qwen_device = "auto"` utilise donc le CPU. Une installation PyTorch CUDA adaptée
-est nécessaire pour utiliser `cuda:0`. Qwen est plus lourd que Pocket ; l’API
-Python produit un passage complet avant de rendre l’audio. L’annulation attend
-la fin du chargement ou du passage en cours. Une description réutilisée ne garantit
-pas un timbre identique entre les passages (ce mode ne fait pas de clonage).
-
-Le code natif Écho n’est pas dans ce dépôt. L’interface web mobile est incluse ici ;
-les nouvelles commandes pour un client natif sont décrites dans [docs/mobile.md](docs/mobile.md).
-L’implémentation suit l’[API officielle VoiceDesign](https://github.com/QwenLM/Qwen3-TTS#voice-design).
-
-If Tkinter is missing, install a Python distribution with Tcl/Tk and recreate
-the virtual environment using that interpreter. On Linux, install the
-distribution's `python3-tk` package; on macOS with Homebrew Python, use the
-matching `python-tk` package. Audio still needs the system's default input and
-output devices. The desktop uses the campaign's `config.toml` for server,
-model, language and voice settings; the OBS overlay remains a CLI feature.
-
-[Guide d’installation en français](docs/desktop-fr.md).
-
-## Requirements
-
-- Windows 11 / macOS for the desktop interface, or Linux (X11 or Wayland for
-  the terminal's global push-to-talk)
-- Python ≥ 3.11 and [uv](https://docs.astral.sh/uv/)
-- A local LLM server: [Ollama](https://ollama.com) (default) — **or** any app
-  serving an OpenAI-compatible API, like [Jan](https://jan.ai),
-  [LM Studio](https://lmstudio.ai), llama.cpp's server, or vLLM
-- A microphone and speakers
-- Optional but recommended: an NVIDIA GPU (a 7B–14B model + GPU whisper make
-  responses fast enough for live play; CPU-only works with smaller models)
-
-Disk footprint after setup: roughly 5–6 GB (LLM ≈ 4.5 GB, whisper-small
-≈ 0.5 GB, Piper voice ≈ 60 MB).
-
-## Installation
-
-### 1. System packages (Ubuntu/Debian)
-
-```bash
-sudo apt install libportaudio2                  # microphone & speaker access for Python
-sudo apt install python3-dev build-essential    # to build evdev, the key listener
-sudo usermod -aG input $USER                    # lets npc read key press/release events
-```
-
-**Log out and back in** after the `usermod` — group changes only apply to new
-logins. (Why: terminals never report key *releases*, so hold-to-talk reads the
-keyboard device directly via evdev, which requires membership in the `input`
-group. No root needed.)
-
-### 2. A local LLM server
-
-**Option A — Ollama** (default, fully terminal-driven):
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen2.5:7b-instruct       # the default model (~4.5 GB)
-```
-
-**Option B — an LLM app you already run** (Jan, LM Studio, llama.cpp, vLLM, …):
-no extra software needed. Enable the app's local API server, load a model, and
-point `config.toml` at it — see
-[Using Jan, LM Studio, or another LLM app](#using-jan-lm-studio-or-another-llm-app).
-
-### 3. This project
-
-The easiest way is from [PyPI](https://pypi.org/project/ttrpg-npc/) — the
-package is `ttrpg-npc`, the installed command is `npc`:
-
-```bash
-uv tool install ttrpg-npc             # or: pipx install ttrpg-npc
-uv tool install "ttrpg-npc[cuda]"     # with NVIDIA GPU (adds CUDA libs for whisper)
-```
-
-That puts `npc` on your PATH (`~/.local/bin`); the `uv run` prefix in the
-examples below becomes optional.
-
-> **Install fails with `fatal error: Python.h: No such file or directory`?**
-> The `evdev` dependency ships no prebuilt wheels, so it compiles a small C
-> extension against whichever Python your installer picked — that Python needs
-> its dev headers. Either install them (`sudo apt install python3-dev
-> build-essential`, step 1 above), or have uv build against a managed Python
-> that bundles its own: `uv tool install --managed-python ttrpg-npc`.
-
-**Or from source**, if you want to hack on it:
-
-```bash
-git clone https://github.com/seetee/npc.git
-cd npc
-uv sync                               # CPU-only
-uv sync --extra cuda                  # with NVIDIA GPU
-```
-
-After a source install there is no bare `npc` command — the program lives
-inside the project's virtualenv, so you invoke it through uv, from the
-project directory:
-
-```bash
-uv run npc <command> …
-```
-
-To get a direct `npc` command from a clone too, install it as an editable uv
-tool: `uv tool install --editable ~/path/to/npc` — it then always runs the
-current code in your clone; pulling new commits is enough, no reinstall.
-
-### 4. Check everything
-
-```bash
-uv run npc init campaigns/mygame      # scaffold a campaign
-uv run npc doctor campaigns/mygame    # verify + download speech models
-```
-
-`doctor` checks every link in the chain — Ollama running, model pulled,
-whisper cached, Piper voice downloaded, audio devices present, input
-permissions — and prints a copy-pasteable fix for anything that fails. Run it
-until everything says `PASS`. The whisper model and Piper voice download
-automatically on the first run; after that you're fully offline.
-
-`npc doctor --fix` goes one step further and offers to run the safe fixes for
-you (pull the Ollama model, download the Piper voice) after a `[y/N]` prompt.
-Anything needing sudo stays copy-paste-only.
-
-## Creating your NPC
-
-`npc init campaigns/mygame` walks you through it: press Enter to start with
-the ready-to-play example NPC (Vess), or type a name and a one-line concept
-to get a personalized skeleton to flesh out. Either way you end up with a
-campaign directory of plain markdown — edit freely, no special syntax:
-
-```
-campaigns/mygame/
-├── character.md    # WHO the NPC is: personality, speech style, knowledge,
-│                   # secrets, hard rules. First "# heading" = the NPC's name.
-├── adventure.md    # your campaign background, from the GM's point of view
-├── secrets.md      # GM-gated clues: the NPC asks YOU before revealing these
-├── lore/           # reference docs (.txt/.md/.pdf) the NPC knows deeply
-├── logbook.md      # session summaries — written by the LLM, editable by you
-├── config.toml     # models, voice, hotkey (all optional, defaults included)
-└── sessions/       # raw per-session transcripts, appended turn by turn
-```
-
-The scaffolded `character.md` contains a complete example NPC (Vess, a wary
-Vault Priest) showing the intended level of detail. The **Secrets** and **Hard
-rules** sections are where you control what the NPC will and won't reveal.
-
-### Gated secrets: the NPC checks with you first
-
-`character.md` secrets are *soft* — the NPC knows them and is told to hold
-back, but a persistent table can pry them loose. Clues in `secrets.md` are
-*locked*: the NPC is shown only a one-line hint per secret, never the content,
-so it **cannot** leak details it has never been given — no matter how hard the
-players push.
-
-When the conversation touches a locked topic, the NPC stalls in character
-("Hm. Give me a moment…") and a prompt appears at your `gm>` console:
-
-```
-⚑ Vess asks to reveal (teleporter-key) — the location of a working teleporter key
-   player: "What's hidden under the altar?"
-   → /yes [note] · /no [note] — stays pending until you decide
-```
-
-Take your time — call for a die roll, check your notes; the request stays
-pending while play continues. Then answer, optionally steering the reveal:
-`/yes but only vaguely, she's still frightened` or `/no she lies and blames
-the raiders`. On `/yes` the secret's full text is handed to the NPC and it
-shares the clue in its own words; on `/no` the topic stays locked for the rest
-of the session; `/later` just dismisses the request (for a misfire, or "not
-yet") so it can come up again. `/secrets` lists each secret's status, and
-`/reveal <id>` unlocks one proactively (the NPC brings it up at the next
-natural moment).
-Reveals are written back into `secrets.md`, so they persist across sessions.
-
-Each secret has a `mode`: `hesitate` (default — the NPC pauses audibly, which
-players *will* notice) or `deflect` (it brushes the question off as if it knew
-nothing, and can "change its mind" if you approve). Write each secret's
-one-line `hint:` in the words players are likely to use — the hint is the only
-thing the NPC can match a question against, since it never sees the secret
-itself. The scaffolded `secrets.md` documents the format; multi-NPC campaigns
-use one file per character in `secrets/<name>.md`. Nothing about a secret —
-not even its id — is ever sent to the table overlay.
-
-### Encyclopedic knowledge (lore files)
-
-Give an NPC deep, reliable knowledge of a topic by dropping reference
-documents into `lore/` — `.txt`, `.md`, or `.pdf`. The contents are injected
-into the NPC's prompt as established fact: it relies on them when answering
-and admits ignorance in character when they don't cover something. Files at
-the root of `lore/` belong to the campaign's `character.md` NPC; in multi-NPC
-campaigns each character reads `lore/<name>/` — knowledge is as strictly
-per-NPC as memory is.
-
-Mind the context window: documents share the prompt with everything else, so
-attaching more than a page or two means raising `num_ctx` under `[llm]` in
-`config.toml` (e.g. `num_ctx = 16384` — roughly 8–10k words of lore on a
-12 GB GPU with a 7B model). Don't guess: `npc doctor` measures your actual
-prompt and prints the value to set, and the session warns you once if the
-prompt outgrows the window. PDFs are extracted as text — fine for prose,
-unreliable for two-column rulebooks and tables; doctor flags PDFs that
-extract suspiciously little (scanned pages), and converting to `.txt` is
-always the safer choice.
-
-### Multiple NPCs
-
-Drop more character sheets into a `characters/` directory — each `.md` file
-is an NPC, named by its first `# heading` — and switch at the table with
-`/npc <name>` (`/npc` alone lists everyone). Each NPC keeps **separate
-memory**: their own conversation, their own standing GM notes, and their own
-logbook (`logbooks/<file>.md`), so a secret told to one NPC never reaches
-another — not even across sessions. Give each their own voice in
-`config.toml`:
-
-```toml
-[tts.voices]
-korval = "en_GB-northern_english_male-medium"   # characters/korval.md
-```
-
-`npc doctor --fix` offers to download any mapped voice that's missing. The
-original `character.md` keeps working unchanged alongside (or instead of)
-`characters/`.
-
-### Example campaigns
-
-Two complete campaigns ship in [`examples/`](examples/) — play them as-is, or
-copy one as a starting point:
-
-- **[The Rusty Lantern](examples/rusty-lantern/)** — a classic-fantasy inn.
-  Mera Vex knows everyone on the Saltmarsh road, waters the ale of the rude,
-  and holds two gated secrets about the old innkeeper's death.
-  `uv run npc run examples/rusty-lantern`
-- **[The Glass Monolith](examples/glass-monolith/)** — a far-future
-  multi-NPC campaign: the wary priest Vess (with lore and secrets) and Tokk
-  the scavenger, showing `/npc` switching and per-character voices.
-  `uv run npc run examples/glass-monolith`
-
-## Playing a session
-
-```bash
-uv run npc run campaigns/mygame
-```
-
-| At the `gm>` prompt | Effect |
-|---|---|
-| **hold spacebar**, speak, release | player speaks to the NPC; it answers out loud |
-| press while the NPC is talking | interrupts the reply and starts recording (walkie-talkie style) |
-| type anything | out-of-character instruction to the LLM |
-| `/say Have you seen the raiders?` | typed in-character player line (no mic needed) |
-| `/npc korval` | switch which NPC you're talking to (`/npc` lists them) |
-| `/yes only the rough direction` / `/no` | answer a pending secret-reveal request, with an optional steer |
-| `/later` | dismiss a reveal request without deciding (it can come up again) |
-| `/secrets` | list the active NPC's gated secrets and their status |
-| `/reveal teleporter-key` | unlock a secret without waiting to be asked |
-| `/save` | write the session summary to the logbook now |
-| `/reload` | re-read `character.md`, `adventure.md`, `config.toml` |
-| `/status` | current state, model, session number |
-| `/end` | summarize the session into the logbook and exit |
-| `/quit` | exit without saving a summary |
-
-Ending with `/end` is what gives the NPC memory: the LLM distills the session's
-transcript into a dated logbook entry (location, the NPC's attitude, highlights,
-open threads), and the most recent entries are fed back to it next session. The
-logbook also auto-checkpoints every 20 player turns, so a crash costs you
-nothing.
-
-Prefer tapping to holding? Set `mode = "tap"` under `[hotkey]` in
-`config.toml`: tap once to start talking and a pause (1.2 s of silence by
-default, tunable via `[stt] vad_silence_seconds`) sends the recording; a
-second tap sends it immediately.
-
-Optional flags on `npc run`:
-
-- `--timings` prints per-stage latency after each reply
-  (`[turn 4.9s: stt 0.8s | llm 2.1s (first token 0.31s) | speak 3.2s]`);
-  `/status` always shows the last/average turn time.
-- `--overlay` (or `[overlay] enabled = true` in `config.toml`) serves a live
-  table display at `http://127.0.0.1:8765` — add it as an OBS browser source
-  or open it in a browser on the same machine (e.g. a second monitor facing
-  the players). It shows the NPC's name, a state light, the last player line,
-  and the reply streaming in as it's spoken.
-- `--mobile` (or `[mobile] enabled = true`) adds a bidirectional player API at
-  `ws://127.0.0.1:8766/ws`: send player dialogue, switch NPCs, receive replies
-  and Piper PCM audio. The CLI and overlay continue to work alongside it.
-  See [the mobile protocol](docs/mobile.md) for configuration and a JavaScript example.
-
-### Overlay on a tablet (LAN)
-
-By default the overlay listens on this machine only. To put it on a tablet or
-phone on the table's Wi-Fi, opt in explicitly in `config.toml`:
-
-```toml
-[overlay]
-enabled = true
-listen = "0.0.0.0"     # or your machine's LAN IP
-```
-
-`npc run` then prints the exact URL to type on the tablet, plus a warning.
-Know what you're opening: the stream is **unauthenticated and unencrypted**,
-so anyone on that network can watch it. In LAN mode only play events are
-broadcast — the player's line, the NPC's reply, state changes. GM notes,
-`/status`, errors, and everything about secrets (even their existence) never
-leave the machine, on any setting.
-
-> **Tell your table:** everything said to the NPC is transcribed and stored
-> locally in `sessions/`, and summarized into the logbook. It never leaves the
-> machine — but recording people's words is still something your players should
-> know about and be okay with.
-
-## Choosing and changing models
-
-`config.toml` is scaffolded with every setting present as a comment showing
-its default:
-
-```toml
-[llm]
-# backend = "ollama"                # or "openai" for Jan, LM Studio, llama.cpp, …
-# model = "qwen2.5:7b-instruct"     # Ollama tag, or the model name your app lists
-# host = "http://localhost:11434"
-[stt]
-# model = "small"                   # whisper size: tiny/base/small/medium/large-v3
-# language = "auto"                 # auto-detects Swedish and English
-[tts]
-# voice = "en_GB-alba-medium"       # Piper voice (Alba, British English)
-```
-
-Uncomment and edit to change. **The LLM model can be swapped mid-session**:
-edit `config.toml`, type `/reload`, and the next reply comes from the new model
-(handy if an NPC turns out to need more brainpower — or less). Whisper and
-Piper models are loaded into memory at startup, so changing those takes effect
-on the next `npc run`; `/reload` will tell you when a restart is needed.
-
-Rough model guidance:
-
-| Hardware | LLM | Whisper |
-|---|---|---|
-| CPU only | `qwen2.5:3b-instruct`, `llama3.2:3b` | `base` or `small` |
-| 8 GB VRAM | `qwen2.5:7b-instruct` (default), `llama3.1:8b` | `small` |
-| 12+ GB VRAM | `qwen2.5:14b-instruct`, `mistral-nemo` | `small` or `medium` |
-
-### Using Jan, LM Studio, or another LLM app
-
-If a machine already runs an LLM app, `npc` can use it instead of Ollama —
-anything that serves the standard OpenAI-compatible API works. In the app,
-enable its local API server and note the model name it exposes, then:
-
-```toml
-[llm]
-backend = "openai"                     # aliases: jan, lmstudio, llamacpp, vllm
-host = "http://localhost:1337"         # Jan's default; LM Studio uses :1234
-model = "qwen2.5-7b-instruct"          # exactly as the app lists it
-```
-
-(`/v1` is appended automatically if you leave it off.) `npc doctor` will show
-which models the server actually offers if the configured name doesn't match.
-The mid-session `/reload` model swap works the same as with Ollama.
-
-If the server wants an API key, set `api_key` under `[llm]` — or better,
-`export NPC_LLM_API_KEY=…`, which overrides the file so the key never sits in
-`config.toml` in plaintext.
-
-## Languages
-
-Whisper auto-detects the player's language per utterance, including French.
-Pin `stt.language = "fr"` (or `"sv"` / `"en"`) if detection guesses wrong.
-The NPC answers in the campaign's `language` (English by default) or its
-`[character_languages]` override. These settings also work with the CLI:
-
-```toml
-# Above all [sections]:
-language = "fr"
-
-[character_languages]
-character = "fr-CH"  # character.md: Swiss French
-korval = "fr-CA"     # characters/korval.md: Canadian/Quebec French
-vess = "fr-BE"       # characters/vess.md: Belgian French
-```
-
-Regional variants guide phrasing without caricature; they do not change a Piper
-voice's trained accent. Explicit custom voices should match the character's language.
-
-## Using a hardware button
-
-Any USB device that emits key events works — a foot pedal, a macro pad, a
-Shuttle controller. Find it and pin it:
-
-```bash
-ls /dev/input/by-id/
-```
-
-```toml
-[hotkey]
-key = "KEY_F13"                                  # whatever your button sends
-device = "/dev/input/by-id/usb-...-event-kbd"    # pin this exact device
-grab = true                                      # exclusive: presses never leak to the terminal
-```
-
-Only enable `grab` for a *dedicated* button — grabbing your actual keyboard
-would swallow all your typing. Without a dedicated button, if holding spacebar
-leaves stray spaces annoying you, switch `key` to `KEY_RIGHTCTRL` or `KEY_F12`.
-
-## Development
-
-```bash
-uv sync --group dev
-uv run pytest                  # unit tests — no audio hardware or Ollama needed
-uv run pytest -m integration   # real whisper/piper/ollama smoke tests (auto-skip)
+```sh
 uv run ruff check .
-
-uv run npc say campaigns/mygame "test"            # debug: TTS only
-uv run npc transcribe campaigns/mygame clip.wav   # debug: STT only
+uv run pytest
+uv build --no-sources
 ```
 
-The full design — pipeline, threads, the event bus, and the five guarantees
-(offline, per-NPC isolation, unleakable secrets, language rules, crash-safe
-writes) — is written up in [ARCHITECTURE.md](ARCHITECTURE.md). Every stage
-sits behind a Protocol, so the whole loop is tested with fakes: no GPU,
-microphone, or LLM server needed for the test suite. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the workflow (including the prompt
-probe scripts) and [CHANGELOG.md](CHANGELOG.md) for release history.
+Les tests ordinaires utilisent des doubles et des fichiers temporaires ; aucune
+campagne personnelle, aucun microphone ou serveur de modèles n'est nécessaire.
+Les tests d'intégration sont séparés : `uv run pytest -m integration`.
+Les tests Tk exigent `NPC_TEST_GUI=1` et un affichage de bureau.
 
-## License
+Deux scripts manuels restent utiles après modification des prompts :
+`uv run python scripts/probe_narration.py [modele]` et
+`uv run python scripts/probe_secrets.py [modele] [repetitions]`.
+Ils utilisent les modèles réels et les templates intégrés, sans modifier une
+campagne personnelle. Leurs résultats nécessitent une lecture humaine.
 
-[AGPL-3.0-or-later](LICENSE). Piper is GPL-3.0; whisper, Ollama and the models
-carry their own licenses.
+La carte du code est dans [ARCHITECTURE.md](ARCHITECTURE.md) et les conventions
+de maintenance dans [AGENTS.md](AGENTS.md). Licence : [AGPL-3.0](LICENSE).
+
+Le compagnon web Écho peut lire le catalogue `studio_list` et télécharger les WAV
+avec `GET /studio/audio/<id>.wav` pour une écoute hors connexion. Ces réponses
+audio autorisent les lectures HTTP entre origines (CORS, sans cookies) ; le
+contrôle d’accès optionnel du serveur reste appliqué avant tout accès au fichier.

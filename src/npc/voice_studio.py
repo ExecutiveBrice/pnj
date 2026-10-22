@@ -8,6 +8,7 @@ import re
 import threading
 import wave
 from datetime import datetime, timezone
+from hashlib import sha256
 from importlib.util import find_spec
 from uuid import uuid4
 
@@ -29,7 +30,9 @@ def required_text(value, name, limit):
 class VoiceStudio:
     def __init__(self, config, *, runtime_factory=get_runtime, llm_factory=None):
         self.config = config
-        self.folder = config.campaign_dir / "voice_studio"
+        self.folder = config.campaign_dir
+        self.folders = {"voices": self.folder / "voix", "stories": self.folder / "histoires"}
+        self.legacy_folder = self.folder / "voice_studio"
         self.runtime_factory = runtime_factory
         self.llm_factory = llm_factory
 
@@ -39,23 +42,72 @@ class VoiceStudio:
 
     def catalog(self):
         result = {"type": "studio_catalog", "available": self.available,
+                  "campaign_id": sha256(str(self.folder.resolve()).encode()).hexdigest()[:32],
                   "languages": list(QWEN_LANGUAGES), "voices": [], "stories": []}
         for category in ("voices", "stories"):
-            for path in sorted((self.folder / category).glob("*.json"), reverse=True):
-                try:
-                    item = json.loads(path.read_text(encoding="utf-8"))
-                    if self.audio_path(item["id"]) is not None:
-                        result[category].append(item)
-                except (OSError, ValueError, KeyError, TypeError):
-                    continue  # an interrupted/external write cannot hide the library
+            seen = set()
+            for folder in (self.folders[category], self.legacy_folder / category):
+                for path in sorted(folder.glob("*.json"), reverse=True):
+                    try:
+                        if not self._local_file(path):
+                            continue
+                        item = json.loads(path.read_text(encoding="utf-8"))
+                        if not isinstance(item, dict) or not all(
+                                isinstance(item.get(key), str) for key in
+                                ("id", "title", "text", "description", "language", "created_at")):
+                            continue
+                        if not isinstance(item.get("duration"), (int, float)):
+                            continue
+                        if item["id"] not in seen and self.audio_path(item["id"]) is not None:
+                            item["audio_url"] = f"/studio/audio/{item['id']}.wav"
+                            result[category].append(item)
+                            seen.add(item["id"])
+                    except (OSError, ValueError, KeyError, TypeError):
+                        continue  # an interrupted/external write cannot hide the library
+            if category == "stories":
+                for path in sorted(self.folders[category].glob("*.wav")):
+                    identifier = self._file_id(path)
+                    if path.stem in seen or identifier in seen or not self._local_file(path):
+                        continue
+                    try:
+                        with wave.open(str(path)) as audio:
+                            duration = audio.getnframes() / audio.getframerate()
+                        text_path = path.with_suffix(".md")
+                        text = (text_path.read_text(encoding="utf-8")
+                                if self._local_file(text_path) else "")
+                        title = next((line[2:].strip() for line in text.splitlines()
+                                      if line.startswith("# ")), path.stem)
+                        result[category].append({
+                            "id": identifier, "title": title, "text": text,
+                            "description": "", "language": "",
+                            "created_at": datetime.fromtimestamp(
+                                path.stat().st_mtime, timezone.utc).isoformat(),
+                            "duration": duration, "audio_url": f"/studio/audio/{identifier}.wav",
+                        })
+                    except (OSError, ValueError, wave.Error, EOFError):
+                        continue
             result[category].sort(key=lambda item: item["created_at"], reverse=True)
         return result
+
+    @staticmethod
+    def _file_id(path):
+        # A stable opaque URL also supports filenames with spaces or accents.
+        return sha256(f"histoires/{path.name}".encode()).hexdigest()[:32]
+
+    def _local_file(self, path):
+        return path.is_file() and path.resolve().is_relative_to(self.folder.resolve())
 
     def audio_path(self, identifier):
         if not isinstance(identifier, str) or not re.fullmatch(r"[a-f0-9]{32}", identifier):
             return None
-        path = self.folder / "audio" / f"{identifier}.wav"
-        return path if path.is_file() else None
+        for folder in (*self.folders.values(), self.legacy_folder / "audio"):
+            path = folder / f"{identifier}.wav"
+            if self._local_file(path):
+                return path
+        for path in self.folders["stories"].glob("*.wav"):
+            if self._file_id(path) == identifier and self._local_file(path):
+                return path
+        return None
 
     def validate(self, message):
         """Validate before reserving the only synthesis slot or loading weights."""
@@ -113,10 +165,12 @@ class VoiceStudio:
         check_cancel()
         parts = list(passages(text))
         identifier = uuid4().hex
-        folder = self.folder / "audio"
+        category = "voices" if request["type"] == "voice_design" else "stories"
+        folder = self.folders[category]
         folder.mkdir(parents=True, exist_ok=True)
         target = folder / f"{identifier}.wav"
         temporary = target.with_suffix(".tmp")
+        story_path = target.with_suffix(".md") if category == "stories" else None
         rate, frames = None, 0
         try:
             with wave.open(str(temporary), "wb") as output:
@@ -145,18 +199,24 @@ class VoiceStudio:
                     "duration": frames / rate, "audio_url": f"/studio/audio/{identifier}.wav"}
             if "voice_id" in request:
                 item["voice_id"] = request["voice_id"]
-            category = "voices" if request["type"] == "voice_design" else "stories"
-            metadata = self.folder / category / f"{identifier}.json"
-            metadata.parent.mkdir(parents=True, exist_ok=True)
-            draft = metadata.with_suffix(".tmp")
-            try:
-                draft.write_text(json.dumps(item, ensure_ascii=False, indent=2), encoding="utf-8")
-                os.replace(draft, metadata)
-            finally:
-                draft.unlink(missing_ok=True)
+            if story_path is not None:
+                self._write_text(story_path, f"# {request['title']}\n\n{text}\n")
+            metadata = target.with_suffix(".json")
+            self._write_text(metadata, json.dumps(item, ensure_ascii=False, indent=2))
             return {"type": "studio_result", "category": category, "item": item}
         except BaseException:
             target.unlink(missing_ok=True)
+            if story_path is not None:
+                story_path.unlink(missing_ok=True)
             raise
         finally:
             temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _write_text(path, text):
+        draft = path.with_suffix(".tmp")
+        try:
+            draft.write_text(text, encoding="utf-8")
+            os.replace(draft, path)
+        finally:
+            draft.unlink(missing_ok=True)

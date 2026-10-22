@@ -131,28 +131,92 @@ def _reply_words(text: str) -> list[str]:
     return re.findall(r"[^\W_]+", text.casefold())
 
 
-def _recent_reply_words(messages: list[dict[str, str]]) -> list[list[str]]:
+def opening_instruction(language: str, *, attitude: str | None = None) -> str:
+    """One-shot GM cue; never added as a player line or a standing note."""
+    if attitude is not None:
+        tones = {
+            "agacement": ("Agacement : montre ton impatience et ton irritation contenue.",
+                          "Annoyance: show impatience and restrained irritation."),
+            "amusant": ("Amusant : sois enjoué, drôle et légèrement taquin.",
+                        "Amusing: be playful, funny and gently teasing."),
+            "rude": ("Rude : sois sec, bourru et direct, avec des phrases sans détour.",
+                     "Rude: be curt, gruff and blunt, with direct phrasing."),
+            "complaisant": ("Complaisant : sois aimable, conciliant et arrangeant, "
+                            "tout en conservant tes objectifs, tes devoirs et tes limites.",
+                            "Accommodating: be friendly, conciliatory and agreeable, "
+                            "while keeping your goals, duties and boundaries."),
+        }
+        tone_fr, tone_en = tones[attitude]
+        if language.startswith("fr"):
+            return (
+                "GM NOTE (out-of-character): Le MJ te demande de prendre la parole maintenant. "
+                "Réagis à la situation actuelle et aux derniers échanges en une à trois phrases, "
+                "avec ta fiche, ton lore, ton journal et tes consignes. " + tone_fr + " "
+                "Ce ton vaut uniquement pour cette réplique, pas pour la suite de la session. "
+                "Garde tes objectifs, tes obligations et tes limites. N'invente aucun événement "
+                "ni lien avec les joueurs. Ne dévoile aucun secret et ne demande aucune "
+                "révélation. Ne recommence pas les présentations si vous vous connaissez. "
+                "Écris uniquement les paroles du PNJ, sans annoncer l'attitude ni les consignes.")
+        return (
+            "GM NOTE (out-of-character): The GM asks you to speak now. React to the current "
+            "situation and latest exchanges in one to three sentences, using your sheet, lore, "
+            "logbook and GM notes. " + tone_en + " "
+            "This tone applies only to this reply, not to the rest of the session. Keep your "
+            "goals, duties and boundaries. Invent no events or relationships with the players. "
+            "Reveal no secrets and do not request disclosure. Do not introduce yourself again "
+            "if you already know the players. Output only the NPC's spoken words, without "
+            "announcing the attitude or instructions.")
+    if language.startswith("fr"):
+        return (
+            "GM NOTE (out-of-character): Le dialogue avec ton personnage vient de s'ouvrir. "
+            "Prends la parole en premier avec une seule courte phrase d'accueil ou de "
+            "présentation naturelle. Appuie-toi sur ta fiche, ton métier, le lieu et le "
+            "contexte actuel de la session : lore, journal, consignes du MJ et échanges "
+            "déjà vécus avec ces joueurs. Si vous vous connaissez, tiens-en compte sans "
+            "recommencer les présentations. Pour un commerçant, une invitation à découvrir "
+            "sa boutique convient si elle correspond à sa situation et à son humeur. "
+            "Invente une nouvelle formulation, différente de tes accueils précédents et "
+            "des exemples de ta fiche. Ne réponds pas à nouveau à une ancienne demande. "
+            "N'invente aucun événement, lieu ou lien avec les joueurs. N'aborde aucun "
+            "secret et ne demande aucune révélation. Écris uniquement les paroles du PNJ.")
+    return (
+        "GM NOTE (out-of-character): Dialogue with your character has just opened. "
+        "Speak first with a single short, natural greeting or introduction. Use your "
+        "character sheet, occupation, location and current session context: lore, "
+        "logbook, GM instructions and earlier exchanges with these players. If you "
+        "already know them, acknowledge that instead of introducing yourself again. "
+        "A merchant may invite them to browse the shop when that fits the situation "
+        "and mood. Create fresh wording, different from previous greetings and sheet "
+        "examples. Do not answer an old request again. Invent no events, places or "
+        "relationships. Do not bring up secrets or request disclosure. Output only "
+        "the NPC's spoken words.")
+
+
+def _recent_reply_words(messages: list[dict[str, str]], *,
+                        include_short: bool = False) -> list[list[str]]:
     replies = [m["content"] for m in messages if m["role"] == "assistant"][-3:]
     # Short greetings and simple yes/no answers can legitimately recur.
-    return [words for text in replies if len(text) >= 32
-            and len(words := _reply_words(text)) >= 6]
+    return [words for text in replies if (words := _reply_words(text))
+            and (include_short or (len(text) >= 32 and len(words) >= 6))]
 
 
-def reply_repeats(reply: str, messages: list[dict[str, str]]) -> bool:
+def reply_repeats(reply: str, messages: list[dict[str, str]], *,
+                  include_short: bool = False) -> bool:
     """Catch substantive copies, ignoring punctuation/case, not paraphrases.
 
     Deliberately avoid similarity scoring: a changed negation or number may
     completely change the meaning of an otherwise nearly identical reply.
     """
     words = _reply_words(reply)
-    return bool(words) and words in _recent_reply_words(messages)
+    return bool(words) and words in _recent_reply_words(messages, include_short=include_short)
 
 
-def reply_may_repeat(prefix: str, messages: list[dict[str, str]]) -> bool:
+def reply_may_repeat(prefix: str, messages: list[dict[str, str]], *,
+                     include_short: bool = False) -> bool:
     """Hold a matching opening before streaming audio; release on divergence."""
     words = _reply_words(prefix)
     return bool(words) and any(old[:len(words)] == words
-                               for old in _recent_reply_words(messages))
+                               for old in _recent_reply_words(messages, include_short=include_short))
 
 
 def asks_to_repeat(text: str) -> bool:

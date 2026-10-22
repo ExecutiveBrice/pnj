@@ -29,7 +29,8 @@ def test_desktop_controls_stay_inside_window(window, geometry):
     root.update()
     for widget in (window.path_entry, window.start_button, window.mic_option,
                    window.entry, window.record_button, window.language_target_picker,
-                   window.language_picker, *window.shortcuts):
+                   window.language_picker, window.speech_picker,
+                   *window.shortcuts, *window.speech_buttons):
         assert widget.winfo_ismapped()
         x = widget.winfo_rootx() - root.winfo_rootx()
         y = widget.winfo_rooty() - root.winfo_rooty()
@@ -47,7 +48,10 @@ def test_desktop_player_gm_and_shutdown_controls(window):
 
         def start(self, *args, **kwargs):
             self.process = object()
-            self.messages.put({"kind": "ready", "microphone": True, "npc": "Vess"})
+            self.messages.put({"kind": "ready", "microphone": True, "npc": "Vess",
+                               "npc_id": "character", "npcs": [
+                                   {"id": "character", "name": "Vess"},
+                                   {"id": "smith", "name": "Smith"}]})
 
         def send(self, action, **values):
             self.sent.append((action, values))
@@ -63,12 +67,19 @@ def test_desktop_player_gm_and_shutdown_controls(window):
     window.send_button.invoke()
     assert engine.sent == [("line", {"text": "/say Who are you?"}),
                            ("line", {"text": "Be suspicious"})]
+    window.speech_target.set("Smith (smith)")
+    for button in window.speech_buttons:
+        button.invoke()
+    assert engine.sent[-4:] == [("speak_npc", {"npc": "smith", "attitude": attitude})
+                               for attitude in ("agacement", "amusant", "rude", "complaisant")]
     window.record_button.invoke()
+    assert all(str(button["state"]) == "disabled" for button in window.speech_buttons)
     window.record_button.invoke()
     assert engine.sent[-2:] == [("record", {}), ("release", {})]
     window.stop_button.invoke()
     assert engine.sent[-1] == ("shutdown", {"summarize": True})
     assert str(window.entry["state"]) == "disabled"
+    assert all(str(button["state"]) == "disabled" for button in window.speech_buttons)
     assert str(window.force_button["state"]) == "normal"
 
 

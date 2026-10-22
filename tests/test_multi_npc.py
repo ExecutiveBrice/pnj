@@ -49,7 +49,7 @@ def multi_app(multi_campaign):
                  on_event=events.append)
     app.events = events
     app.factory = factory
-    app.start()
+    app.start(greet=False)
     yield app
     app._queue.put(None)
 
@@ -144,7 +144,7 @@ def test_checkpoint_summarizes_only_dirty_npcs(multi_campaign):
     config.checkpoint_every_turns = 2
     app = NPCApp(config, llm=FakeLLM(), on_event=events.append)
     app.events = events
-    app.start()
+    app.start(greet=False)
     app.handle_line("/say one")           # Vess
     app.handle_line("/npc korval")
     app.handle_line("/say two")           # Korval → checkpoint fires (2 turns)
@@ -184,7 +184,7 @@ def test_failing_voice_falls_back_to_default(multi_app):
     assert multi_app.speaker is default_speaker
     multi_app.handle_line("/say hello")
     drain(multi_app)
-    assert default_speaker.spoken == ["Greetings, traveler."]  # still audible
+    assert default_speaker.spoken == ["Greetings, traveler."] * 2  # opening + answer
 
 
 def test_ooc_note_after_switch_lands_on_the_new_npc(multi_app):
@@ -294,23 +294,24 @@ def test_switching_npcs_uses_each_regional_language_and_voice(multi_campaign):
     factory = FakeSpeakerFactory()
     app = NPCApp(load_config(multi_campaign), llm=FakeLLM(),
                  speaker=FakeSpeaker(), make_speaker=factory)
-    app.start()
+    app.start(greet=False)
     try:
         for stem, regional, reply in (
             ("character", "Swiss", "Cela coûte septante pièces."),
             ("korval", "Quebec", "Bienvenue chez nous, mon ami."),
             ("mira", "Always answer in English", "You are welcome, traveler."),
         ):
-            switch(app, stem)
             app.llm.reply = reply
+            switch(app, stem)
             app.handle_line("/say Bonjour")
             drain(app)
             assert regional in app.llm.calls[-1][0]
             assert app.speaker.spoken[-1] == reply
-        assert len(app.llm.calls) == 3
+        assert len(app.llm.calls) == 6  # opening + answer for each NPC
         assert factory.calls[-1].name == "en_GB-alba-medium.onnx"
+        app.llm.reply = "Vous revoilà, entrez donc chez nous !"
         switch(app, "korval")
-        assert app.speaker.spoken == ["Cela coûte septante pièces.",
-                                      "Bienvenue chez nous, mon ami."]
+        assert app.speaker.spoken == ["Cela coûte septante pièces."] * 2 + [
+            "Bienvenue chez nous, mon ami."] * 2 + ["Vous revoilà, entrez donc chez nous!"]
     finally:
         app.shutdown(summarize=False)

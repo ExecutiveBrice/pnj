@@ -64,7 +64,6 @@ explicit = true
 Homepage = "https://github.com/seetee/npc"
 Repository = "https://github.com/seetee/npc"
 Issues = "https://github.com/seetee/npc/issues"
-Changelog = "https://github.com/seetee/npc/blob/main/CHANGELOG.md"
 
 [project.scripts]
 npc = "npc.cli:main"
@@ -86,7 +85,7 @@ build-backend = "hatchling.build"
 packages = ["src/npc"]
 
 [tool.hatch.build.targets.sdist]
-exclude = ["docs/", ".github/", "campaigns/"]
+exclude = [".github/", ".idea/", "campaigns/", "*.onnx", "*.onnx.json", "voix/", "histoires/"]
 
 [tool.pytest.ini_options]
 markers = [

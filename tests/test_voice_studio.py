@@ -46,6 +46,12 @@ def test_voice_profile_reused_for_literal_story_and_persisted_across_restart(stu
     text = ("La forêt s’éveille. Les voyageurs reprennent leur chemin. " * 30).strip()
     story = studio.run(request(studio, "narrate_text", voice_id=voice["id"], text=text))["item"]
     assert story["text"] == text and story["voice_id"] == voice["id"]
+    campaign = studio.config.campaign_dir
+    assert studio.audio_path(voice["id"]) == campaign / "voix" / f"{voice['id']}.wav"
+    assert studio.audio_path(story["id"]) == campaign / "histoires" / f"{story['id']}.wav"
+    assert (campaign / "histoires" / f"{story['id']}.md").read_text(encoding="utf-8") == (
+        f"# Le gardien\n\n{text}\n")
+    assert not (campaign / "voice_studio").exists()
     assert all(call[1:] == ("Grave et calme.", "French") for call in studio.calls)
     with wave.open(str(studio.audio_path(story["id"]))) as audio:
         assert audio.getframerate() == 24000 and audio.getnchannels() == 1
@@ -62,10 +68,132 @@ def test_generate_story_uses_only_the_user_idea_without_campaign_secrets(studio)
     studio.llm_factory = lambda: llm
     result = studio.run(request(studio, "generate_story", prompt="Un dragon qui a peur du noir."))
     assert result["item"]["text"] == "Greetings, traveler."
+    story = result["item"]
+    assert (studio.config.campaign_dir / "histoires" / f"{story['id']}.md").read_text(
+        encoding="utf-8") == "# Le gardien\n\nGreetings, traveler.\n"
     system, messages = llm.calls[0]
     assert "French" in system
     assert messages == [{"role": "user", "content": "Un dragon qui a peur du noir."}]
     assert studio.config.campaign_dir.name not in system
+
+
+def test_legacy_library_still_plays_without_moving_old_files(studio):
+    voice = studio.run(request(studio))["item"]
+    folder = studio.config.campaign_dir
+    legacy = folder / "voice_studio"
+    (legacy / "audio").mkdir(parents=True)
+    (legacy / "voices").mkdir()
+    for suffix, destination in ((".wav", "audio"), (".json", "voices")):
+        (folder / "voix" / f"{voice['id']}{suffix}").rename(
+            legacy / destination / f"{voice['id']}{suffix}")
+    restored = StubStudio(studio.config)
+    assert restored.catalog()["voices"] == [voice]
+    assert restored.audio_path(voice["id"]) == legacy / "audio" / f"{voice['id']}.wav"
+    story = studio.run(request(studio, "narrate_text", voice_id=voice["id"]))["item"]
+    assert studio.audio_path(story["id"]).parent == folder / "histoires"
+
+
+def test_campaign_wavs_without_studio_metadata_are_listed_and_seekable(studio_server):
+    server = studio_server
+    folder = server.studio.folder / "histoires"
+    folder.mkdir()
+    path = folder / "La forêt des murmures.wav"
+    with wave.open(str(path), "wb") as audio:
+        audio.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+        audio.writeframes(np.zeros(24000, dtype="<i2").tobytes())
+    path.with_suffix(".md").write_text("# La forêt\n\nIl était une fois…", encoding="utf-8")
+    (folder / "brouillon.wav").write_bytes(b"incomplete")
+    (folder / "texte-seul.md").write_text("Sans audio", encoding="utf-8")
+    (folder / "mj").mkdir()
+    (folder / "mj" / "secret.wav").write_bytes(path.read_bytes())
+
+    with connect(f"ws://127.0.0.1:{server.port}/ws") as ws:
+        receive_until(ws, "hello")
+        ws.send(json.dumps({"type": "studio_list"}))
+        catalog = receive_until(ws, "studio_catalog")
+    assert len(catalog["stories"]) == 1
+    story = catalog["stories"][0]
+    assert story["title"] == "La forêt" and story["duration"] == 1
+    assert "Il était une fois" in story["text"]
+    assert server.studio.audio_path(story["id"]) == path
+    assert StubStudio(server.app.config).catalog()["stories"] == [story]
+    with httpx.Client(trust_env=False) as http:
+        url = f"http://127.0.0.1:{server.port}" + story["audio_url"]
+        assert http.get(url).content == path.read_bytes()
+        assert http.get(url, headers={"Range": "bytes=-10"}).content == path.read_bytes()[-10:]
+    assert not server.studio.calls
+
+
+
+def test_standalone_web_app_can_download_audio_without_bypassing_authorization(studio_server):
+    server = studio_server
+    story = server.studio.run(request(server.studio, "narrate_text"))["item"]
+    url = f"http://127.0.0.1:{server.port}" + story["audio_url"]
+    origin = {"Origin": "http://localhost:4200"}
+    with httpx.Client(trust_env=False) as http:
+        response = http.get(url, headers=origin)
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == "*"
+        assert response.headers["content-type"] == "audio/wav"
+        assert response.content == server.studio.audio_path(story["id"]).read_bytes()
+        assert "access-control-allow-credentials" not in response.headers
+        ranged = http.get(url, headers={**origin, "Range": "bytes=0-43"})
+        assert ranged.status_code == 206
+        assert ranged.headers["access-control-allow-origin"] == "*"
+        assert "Content-Range" in ranged.headers["access-control-expose-headers"]
+        server._authorize = lambda request: False
+        assert http.get(url, headers=origin).status_code == 401
+
+
+def test_campaign_id_is_stable_and_does_not_expose_path(studio, tmp_path):
+    identifier = studio.catalog()["campaign_id"]
+    assert len(identifier) == 32
+    assert StubStudio(studio.config).catalog()["campaign_id"] == identifier
+    other = StubStudio(SimpleNamespace(campaign_dir=tmp_path / "other"))
+    assert other.catalog()["campaign_id"] != identifier
+
+
+def test_story_discovery_does_not_follow_links_outside_campaign(studio, tmp_path):
+    outside = tmp_path / "private.wav"
+    with wave.open(str(outside), "wb") as audio:
+        audio.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+        audio.writeframes(b"\x00\x00")
+    folder = studio.folder / "histoires"
+    folder.mkdir()
+    linked = folder / "secret.wav"
+    try:
+        linked.symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlinks unavailable")
+    assert studio.catalog()["stories"] == []
+    assert studio.audio_path(studio._file_id(linked)) is None
+
+
+def test_offline_scripts_are_served_and_require_authorization(studio_server):
+    base = f"http://127.0.0.1:{studio_server.port}"
+    with httpx.Client(trust_env=False) as http:
+        for resource in ("/mobile-sw.js", "/mobile-offline.js"):
+            response = http.get(base + resource)
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/javascript")
+            studio_server._authorize = lambda request: False
+            assert http.get(base + resource).status_code == 401
+            studio_server._authorize = None
+
+
+def test_metadata_failure_leaves_no_incomplete_story(studio, monkeypatch):
+    write = studio._write_text
+
+    def fail_metadata(path, text):
+        if path.suffix == ".json":
+            raise OSError("disk full")
+        write(path, text)
+
+    monkeypatch.setattr(studio, "_write_text", fail_metadata)
+    with pytest.raises(OSError, match="disk full"):
+        studio.run(request(studio, "narrate_text"))
+    assert list((studio.config.campaign_dir / "histoires").iterdir()) == []
+    assert studio.catalog()["stories"] == []
 
 
 @pytest.mark.parametrize("values", [{"text": ""}, {"text": "a" * 12001}, {"language": "Klingon"},

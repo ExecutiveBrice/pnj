@@ -72,6 +72,24 @@ def test_broken_pdf_lands_in_errors_not_exceptions(tmp_path):
     assert len(errors) == 1 and errors[0].startswith("broken.pdf:")
 
 
+def test_shared_pdf_failure_is_cached_but_reported_to_each_npc(tmp_path, monkeypatch):
+    path = tmp_path / "broken.pdf"
+    path.write_bytes(b"broken")
+    attempts = []
+
+    def fail(path):
+        attempts.append(path)
+        raise ValueError("invalid PDF")
+
+    monkeypatch.setattr("npc.session.lore._extract_pdf", fail)
+    cache = {}
+    for name in ("alice", "bob"):
+        files, errors = load_lore(tmp_path / name, shared_files=(path,), cache=cache)
+        assert files == []
+        assert errors == ["broken.pdf: invalid PDF"]
+    assert attempts == [path]
+
+
 def test_lore_block_framing_and_sections():
     block = lore_block([
         LoreFile("guilds.md", "Nine guilds rule the docks.", 5),

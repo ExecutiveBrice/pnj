@@ -40,6 +40,12 @@
     .empty { padding: 20px 0; color: #53665d; }
     details { margin-top: 12px; overflow-wrap: anywhere; }
     details p { white-space: pre-wrap; margin-top: 12px; }
+    .npc-fields { margin: 16px 0; overflow-wrap: anywhere; }
+    .npc-fields dt { font-weight: 600; margin-top: 12px; }
+    .npc-fields dd { margin: 2px 0 0; white-space: pre-wrap; }
+    .npc-secret { padding: 14px 0; border-top: 1px solid #d9dfd4; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .npc-secret p { margin: 6px 0 0; }
+    .npc-speech { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     a { color: #254f43; }
     [hidden] { display: none !important; }
     @media (max-width: 480px) { main { padding: 20px 14px 45px; } .card { padding: 18px; } nav button { flex: 1; } }
@@ -48,13 +54,22 @@
 <body>
   <header><div class="brand">Écho</div><p>Donnez une voix à vos histoires.</p><span id="connection" role="status">Connexion…</span></header>
   <main>
-    <h1>Le studio du conteur</h1>
-    <p class="muted">Décrivez une voix, écrivez un récit et retrouvez vos créations à l’écoute.</p>
+    <h1 id="pageTitle">Le studio du conteur</h1>
+    <p id="pageIntro" class="muted">Décrivez une voix, écrivez un récit et retrouvez vos créations à l’écoute.</p>
     <p id="notice" hidden></p>
     <nav aria-label="Studio">
+      <button type="button" id="npcTab" data-tab="npcs" aria-pressed="false" hidden>PNJ · MJ</button>
       <button type="button" data-tab="stories" aria-pressed="true">Histoires</button>
       <button type="button" data-tab="voices" aria-pressed="false">Voix</button>
     </nav>
+    <section id="npcs" hidden>
+      <h2>Les personnages de la campagne</h2>
+      <p class="muted">Repères réservés au maître du jeu. Consulter un secret ici ne l’autorise pas à être révélé aux joueurs.</p>
+      <label for="npcSearch">Rechercher un PNJ ou un scénario</label>
+      <input id="npcSearch" type="search" placeholder="Nom, scénario…">
+      <div class="actions"><button type="button" id="refreshNpcs">Actualiser les fiches</button></div>
+      <div id="npcLibrary" aria-live="polite"></div>
+    </section>
     <section id="stories">
       <form id="storyForm" class="card">
         <h2>Une histoire à écouter</h2>
@@ -70,7 +85,9 @@
         <label for="storyLanguage">Langue du récit</label><select id="storyLanguage" class="language"></select>
         <div class="actions"><button class="primary generate" type="submit" disabled>Générer l’audio</button></div>
       </form>
-      <h2>Vos histoires</h2><div id="storyLibrary" aria-live="polite"></div>
+      <h2>Vos histoires</h2>
+      <p id="offlineHelp" class="muted" role="status">Conservez vos histoires sur ce téléphone avant de vous déconnecter du PC.</p>
+      <div id="storyLibrary" aria-live="polite"></div>
     </section>
     <section id="voices" hidden>
       <form id="voiceForm" class="card">
@@ -90,12 +107,23 @@
     <div id="job" role="status" aria-live="polite" hidden><span id="jobText"></span><progress id="progress"></progress><button type="button" id="cancel">Annuler</button></div>
     <section id="result" class="card" hidden><h2 id="resultTitle">Votre création est prête</h2><audio id="resultAudio" controls preload="metadata"></audio><p id="resultHint" class="muted">Touchez Lecture pour écouter. Votre création est conservée dans la bibliothèque.</p></section>
   </main>
+  <script src="/mobile-offline.js"></script>
   <script>
     'use strict';
     const $ = id => document.getElementById(id);
     let socket, available = false, busy = false, reconnectTimer;
+    let gm = false, npcCards = [], speechAttitudes = [], npcState = 'idle', speechPending = false;
+    const speechButtons = new Set();
+    const secretViews = new Map();
+    const offline = new EchoOffline();
+    let storageReady = false, catalogQueue = Promise.resolve();
+    const offlineControls = new Set();
     function notice(text) { $('notice').textContent = text; $('notice').hidden = !text; }
-    function controls() { document.querySelectorAll('.generate').forEach(button => button.disabled = !available || busy || socket?.readyState !== WebSocket.OPEN); }
+    function controls() {
+      document.querySelectorAll('.generate').forEach(button => button.disabled = !available || busy || socket?.readyState !== WebSocket.OPEN);
+      for (const update of offlineControls) update();
+      for (const button of speechButtons) button.disabled = !gm || npcState !== 'idle' || socket?.readyState !== WebSocket.OPEN;
+    }
     function send(message) {
       if (socket?.readyState !== WebSocket.OPEN) { notice('La connexion au PC est interrompue.'); return false; }
       socket.send(JSON.stringify(message)); return true;
@@ -108,21 +136,120 @@
     function audioUrl(value) {
       return typeof value === 'string' && /^\/studio\/audio\/[a-f0-9]{32}\.wav$/.test(value) ? value : '';
     }
+    function selectTab(name) {
+      document.querySelectorAll('[data-tab]').forEach(tab => tab.setAttribute('aria-pressed', String(tab.dataset.tab === name)));
+      for (const id of ['stories', 'voices', 'npcs']) $(id).hidden = id !== name;
+      $('pageTitle').textContent = name === 'npcs' ? 'Le compagnon de campagne' : 'Le studio du conteur';
+      $('pageIntro').textContent = name === 'npcs' ? 'Retrouvez vos PNJ, leurs repères et leurs secrets pendant la partie.' : 'Décrivez une voix, écrivez un récit et retrouvez vos créations à l’écoute.';
+    }
+    function clearNpcs() {
+      gm = false; npcCards = []; speechAttitudes = []; speechPending = false; secretViews.clear(); speechButtons.clear();
+      $('npcLibrary').replaceChildren(); $('npcTab').hidden = true;
+      if (!$('npcs').hidden) selectTab('stories');
+    }
+    function renderNpcs() {
+      secretViews.clear(); speechButtons.clear(); $('npcLibrary').replaceChildren();
+      const query = $('npcSearch').value.trim().toLocaleLowerCase('fr');
+      for (const npc of npcCards) {
+        if (query && !`${npc.name} ${npc.scenario}`.toLocaleLowerCase('fr').includes(query)) continue;
+        const card = document.createElement('article'); card.className = 'card';
+        const title = document.createElement('h3'); title.textContent = npc.name;
+        const state = document.createElement('p'); state.className = 'meta'; state.textContent = npc.active ? 'PNJ sélectionné' : npc.id;
+        const fields = document.createElement('dl'); fields.className = 'npc-fields';
+        for (const [label, value] of [['Scénario', npc.scenario], ['Attitude', npc.attitude], ['Motivation', npc.motivation], ['Levier de négociation', npc.negotiation], ['Nombre de secrets', String(npc.secret_count)]]) {
+          const term = document.createElement('dt'), description = document.createElement('dd');
+          term.textContent = label; description.textContent = value || 'Non renseigné'; fields.append(term, description);
+        }
+        const actions = document.createElement('div'); actions.className = 'actions';
+        const speechLabel = document.createElement('p'); speechLabel.className = 'meta'; speechLabel.textContent = 'Faire parler ce PNJ · attitude pour cette réplique';
+        const speech = document.createElement('div'); speech.className = 'npc-speech';
+        for (const attitude of speechAttitudes) {
+          const cue = document.createElement('button'); cue.type = 'button'; cue.textContent = attitude.label;
+          cue.addEventListener('click', () => {
+            if (send({type:'speak_npc', npc:npc.id, attitude:attitude.id})) { speechPending = true; npcState = 'processing'; controls(); }
+          });
+          speechButtons.add(cue); speech.append(cue);
+        }
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Voir les secrets';
+        button.disabled = !npc.secret_count; button.setAttribute('aria-expanded', 'false');
+        const secrets = document.createElement('div'); secrets.hidden = true; secrets.id = `npc-secrets-${secretViews.size}`;
+        button.setAttribute('aria-controls', secrets.id);
+        const view = {button, secrets, open:false}; secretViews.set(npc.id, view);
+        button.addEventListener('click', () => {
+          view.open = !view.open;
+          button.setAttribute('aria-expanded', String(view.open));
+          button.textContent = view.open ? 'Masquer les secrets' : 'Voir les secrets';
+          secrets.replaceChildren(); secrets.hidden = !view.open;
+          if (view.open) { secrets.textContent = 'Chargement des secrets…'; send({type:'get_npc_secrets', npc:npc.id}); }
+        });
+        actions.append(button); card.append(title, state, fields, speechLabel, speech, actions, secrets); $('npcLibrary').append(card);
+      }
+      if (!$('npcLibrary').children.length) {
+        const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = 'Aucun PNJ trouvé.'; $('npcLibrary').append(empty);
+      }
+      controls();
+    }
+    function showNpcSecrets(message) {
+      const view = secretViews.get(message.id);
+      if (!gm || !view?.open) return;
+      view.secrets.replaceChildren();
+      const labels = {local:'Confidence locale · selon les conditions de la fiche', locked:'Bloqué · autorisation MJ requise', pending:'En attente de décision du MJ', denied:'Refusé pour cette session', revealed:'Révélation déjà autorisée'};
+      for (const secret of message.secrets) {
+        const entry = document.createElement('div'); entry.className = 'npc-secret';
+        const status = document.createElement('strong'); status.textContent = labels[secret.status] || 'Secret MJ';
+        const hint = document.createElement('p'); hint.className = 'muted'; hint.textContent = secret.hint;
+        const body = document.createElement('p'); body.textContent = secret.body;
+        entry.append(status, hint, body); view.secrets.append(entry);
+      }
+    }
     function renderLibrary(target, items) {
+      if (target.id === 'storyLibrary') offlineControls.clear();
       target.replaceChildren();
       if (!items.length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = 'Vos créations apparaîtront ici.'; target.append(empty); }
       for (const item of items) {
         const card = document.createElement('article'); card.className = 'card';
         const title = document.createElement('h3'); title.textContent = item.title;
-        const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = `${item.language} · ${Math.round(item.duration)} s`;
-        const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'none'; audio.src = audioUrl(item.audio_url);
+        const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = `${item.language || 'Récit'} · ${Math.round(item.duration)} s`;
+        const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'none'; audio.src = offline.url(item) || audioUrl(item.audio_url);
         const link = document.createElement('a'); link.href = audio.src; link.download = `${item.title}.wav`; link.textContent = 'Télécharger l’audio';
         const details = document.createElement('details'), summary = document.createElement('summary'), text = document.createElement('p');
         summary.textContent = 'Texte et voix'; text.textContent = `${item.description}\n\n${item.text}`; details.append(summary, text);
-        card.append(title, meta, audio, link, details); target.append(card);
+        card.append(title, meta, audio, link, details);
+        if (target.id === 'storyLibrary') {
+          const status = document.createElement('p'), button = document.createElement('button');
+          status.className = 'meta'; button.type = 'button';
+          let pending = false;
+          const update = () => {
+            const saved = offline.saved.has(item.id);
+            status.textContent = pending ? 'Téléchargement en cours…' : saved ? 'Disponible hors ligne sur ce téléphone' : 'Disponible sur le PC';
+            button.textContent = saved ? 'Retirer la copie hors ligne' : 'Conserver hors ligne';
+            button.disabled = pending || !storageReady || (!saved && socket?.readyState !== WebSocket.OPEN);
+          };
+          offlineControls.add(update); update();
+          button.addEventListener('click', async () => {
+            const campaign = offline.campaign;
+            pending = true; update();
+            try {
+              if (offline.saved.has(item.id)) { audio.pause(); await offline.remove(item); }
+              else await offline.save(item);
+              if (campaign === offline.campaign) {
+                const source = offline.url(item) || audioUrl(item.audio_url);
+                if (audio.paused) audio.src = source;
+                link.href = source;
+                notice('');
+              }
+            } catch {
+              notice('Impossible de modifier la copie hors ligne. Vérifiez la connexion au PC et l’espace disponible sur le téléphone.');
+            } finally { pending = false; update(); }
+          });
+          card.append(status, button);
+        }
+        target.append(card);
       }
     }
-    function catalog(message) {
+    async function catalog(message, persist = true) {
+      try { await offline.select(message, persist); }
+      catch { storageReady = false; $('offlineHelp').textContent = 'Le stockage local est indisponible. Vous pouvez télécharger les WAV pour les écouter dans votre lecteur audio.'; }
       available = message.available; controls();
       notice(available ? '' : 'Pour créer des voix, installez Qwen3-TTS sur le PC avec : uv sync --extra qwen. Les audios existants restent disponibles.');
       for (const select of document.querySelectorAll('.language')) {
@@ -135,7 +262,9 @@
       for (const voice of message.voices) $('voiceChoice').add(new Option(voice.title, voice.id));
       $('voiceChoice').value = message.voices.some(v => v.id === previous) ? previous : '';
       voiceChanged();
-      renderLibrary($('voiceLibrary'), message.voices); renderLibrary($('storyLibrary'), message.stories);
+      const stories = [...message.stories];
+      for (const {item} of offline.saved.values()) if (!stories.some(story => story.id === item.id)) stories.push(item);
+      renderLibrary($('voiceLibrary'), message.voices); renderLibrary($('storyLibrary'), stories);
     }
     function connect() {
       clearTimeout(reconnectTimer);
@@ -144,7 +273,15 @@
       socket.addEventListener('message', event => {
         if (typeof event.data !== 'string') return;
         let message; try { message = JSON.parse(event.data); } catch { return; }
-        if (message.type === 'studio_catalog') catalog(message);
+        if (message.type === 'hello') {
+          clearNpcs(); gm = message.capabilities?.secret_approval === true; $('npcTab').hidden = !gm;
+          npcState = message.state;
+          if (gm) selectTab('npcs');
+        }
+        if (message.type === 'gm_npc_list' && gm) { npcCards = message.npcs; speechAttitudes = message.speech_attitudes || []; renderNpcs(); }
+        if (message.type === 'state' || message.type === 'status') { speechPending = false; npcState = message.state; controls(); }
+        if (message.type === 'gm_npc_secrets') showNpcSecrets(message);
+        if (message.type === 'studio_catalog') catalogQueue = catalogQueue.then(() => catalog(message)).catch(() => notice('Impossible de lire la bibliothèque.'));
         if (message.type === 'studio_started') { busy = true; controls(); $('job').hidden = false; }
         if (message.type === 'studio_progress') {
           $('jobText').textContent = message.message;
@@ -157,9 +294,12 @@
           $('result').scrollIntoView({behavior:'smooth', block:'center'}); send({type:'studio_list'});
         }
         if (message.type === 'studio_cancelled') { finish(); notice('Génération annulée.'); }
-        if (message.type === 'studio_error' || message.type === 'error') { finish(); notice(message.message); }
+        if (message.type === 'studio_error' || message.type === 'error') {
+          finish(); notice(message.message);
+          if (speechPending && message.type === 'error') { speechPending = false; send({type:'status'}); }
+        }
       });
-      socket.addEventListener('close', () => { $('connection').textContent = 'Déconnecté · reconnexion…'; finish(); available = false; controls(); reconnectTimer = setTimeout(connect, 2000); });
+      socket.addEventListener('close', () => { clearNpcs(); $('connection').textContent = 'Hors ligne · écoute des copies locales disponible'; finish(); available = false; controls(); reconnectTimer = setTimeout(connect, 2000); });
       socket.addEventListener('error', () => socket.close());
     }
     function voiceChanged() { const custom = !$('voiceChoice').value; $('descriptionField').hidden = !custom; $('storyDescription').required = custom; }
@@ -179,11 +319,34 @@
       start(message);
     });
     $('cancel').addEventListener('click', () => { send({type:'studio_cancel'}); $('jobText').textContent = 'Annulation après le chargement ou le passage en cours…'; });
+    $('npcSearch').addEventListener('input', renderNpcs);
+    $('refreshNpcs').addEventListener('click', () => send({type:'status'}));
     document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => {
-      document.querySelectorAll('[data-tab]').forEach(tab => tab.setAttribute('aria-pressed', String(tab === button)));
-      $('stories').hidden = button.dataset.tab !== 'stories'; $('voices').hidden = button.dataset.tab !== 'voices';
+      selectTab(button.dataset.tab);
     }));
-    connect();
+    async function initialize() {
+      try {
+        await offline.db; storageReady = true;
+        const saved = await offline.restore();
+        if (saved) await catalog(saved, false);
+      } catch {
+        storageReady = false;
+        $('offlineHelp').textContent = 'Le stockage local est indisponible. Téléchargez les WAV pour les écouter dans votre lecteur audio.';
+      }
+      connect();
+      if (storageReady && window.isSecureContext && 'serviceWorker' in navigator) {
+        try {
+          await navigator.serviceWorker.register('/mobile-sw.js');
+          await navigator.serviceWorker.ready;
+          $('offlineHelp').textContent = 'Conservez vos histoires sur ce téléphone. Vous pourrez rouvrir cette page à la même adresse et les écouter sans connexion au PC.';
+        } catch {
+          $('offlineHelp').textContent = 'Gardez cette page ouverte pour écouter les copies hors ligne, ou téléchargez les WAV. La préparation de la réouverture hors ligne a échoué.';
+        }
+      } else if (storageReady) {
+        $('offlineHelp').textContent = 'Conservez vos histoires puis gardez cette page ouverte pour les écouter sans le PC. Pour rouvrir la page hors ligne, une adresse HTTPS est nécessaire. Vous pouvez aussi télécharger les WAV.';
+      }
+    }
+    initialize();
   </script>
 </body>
 </html>

@@ -49,7 +49,7 @@ def server(config, campaign):
             server.publish(event)
 
     app = NPCApp(config, llm=FakeLLM(), speaker=FakeSpeaker(), on_event=on_event)
-    app.start()
+    app.start(greet=False)
     server = MobileServer(app, port=0)
     server.start()
     yield server
@@ -265,6 +265,8 @@ def test_switch_and_late_hello_use_current_npc(server):
         selected = hello["npcs"][1]
         send(ws, type="switch_npc", npc=selected["id"])
         assert until(ws, "npc_switched") == {"type": "npc_switched", "npc": "Mordrek"}
+        assert until(ws, "npc_replied")["npc"] == "Mordrek"
+        server.app._queue.join()  # the selection includes the NPC's opening
         send(ws, type="status")
         assert until(ws, "status") == {"type": "status", "npc": "Mordrek", "state": "idle",
                                         "npcs": hello["npcs"]}

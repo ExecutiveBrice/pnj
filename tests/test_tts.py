@@ -7,6 +7,24 @@ import numpy as np
 from npc.tts import PiperSpeaker
 
 
+def test_audition_catalog_uses_only_installed_piper_pairs_and_current_backend(tmp_path):
+    from npc.config import TtsConfig
+    from npc.engines.pocket import POCKET_VOICES
+    from npc.tts import available_voices
+
+    config = TtsConfig(voices_dir=str(tmp_path), voice="missing")
+    (tmp_path / "installed.onnx").touch()
+    (tmp_path / "installed.onnx.json").write_text("{}")
+    (tmp_path / "incomplete.onnx").touch()
+    assert available_voices(config) == ("installed",)
+    config.backend = "pocket"
+    assert available_voices(config) == POCKET_VOICES
+    config.backend = "qwen"
+    config.voice = "A calm voice."
+    config.voices = {"guard": "A deep voice.", "smith": "A calm voice."}
+    assert available_voices(config) == ("A calm voice.", "A deep voice.")
+
+
 class StubPiperSpeaker(PiperSpeaker):
     """PiperSpeaker with the voice model stubbed out (no piper needed)."""
 

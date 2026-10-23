@@ -86,6 +86,32 @@ def test_num_ctx_parses_and_validates(tmp_path):
         load_config(tmp_path)
 
 
+def test_sampling_parameters_roundtrip_including_disabled_filters(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("[llm]\ntemperature = 0.2\ntop_p = 0.9\ntop_k = 40\n"
+                    "repeat_penalty = 1.05\n", encoding="utf-8")
+    config = load_config(tmp_path).llm
+    assert (config.temperature, config.top_p, config.top_k, config.repeat_penalty) == (
+        0.2, 0.9, 40, 1.05)
+    path.write_text("[llm]\ntemperature = 0\ntop_p = 1\ntop_k = 0\n"
+                    "repeat_penalty = 1\n", encoding="utf-8")
+    config = load_config(tmp_path).llm
+    assert (config.temperature, config.top_p, config.top_k, config.repeat_penalty) == (0, 1, 0, 1)
+
+
+@pytest.mark.parametrize("key, value", [
+    ("temperature", "true"), ("temperature", '"warm"'), ("temperature", "-0.1"),
+    ("temperature", "2.1"), ("temperature", "nan"), ("temperature", "inf"),
+    ("top_p", "false"), ("top_p", "1.1"), ("top_p", "-0.1"), ("top_p", "nan"),
+    ("top_k", "true"), ("top_k", "2.5"), ("top_k", "-1"),
+    ("repeat_penalty", "false"), ("repeat_penalty", "-1"), ("repeat_penalty", "inf"),
+])
+def test_invalid_sampling_values_raise_friendly_config_errors(tmp_path, key, value):
+    (tmp_path / "config.toml").write_text(f"[llm]\n{key} = {value}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=f"llm.{key}"):
+        load_config(tmp_path)
+
+
 def test_overlay_listen_parses_and_rejects_empty(tmp_path):
     (tmp_path / "config.toml").write_text('[overlay]\nlisten = "0.0.0.0"\n',
                                           encoding="utf-8")

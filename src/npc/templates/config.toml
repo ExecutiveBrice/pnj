@@ -14,6 +14,11 @@
 # timeout_seconds = 60              # per-request cap; a hung server becomes an error, not a stuck session
 # retries = 1                       # extra attempts after connection failures (HTTP errors never retry)
 # stream = true                     # speak sentence-by-sentence while the reply generates
+# Sampling is left to the server when these keys are omitted.
+# temperature = 0.2                 # a conservative starting point; 0 can repeat a wrong answer
+# top_p = 0.9                       # probability filter; change one sampling setting at a time
+# top_k = 40                        # Ollama only; 0 disables the token-count filter
+# repeat_penalty = 1.0              # Ollama only; 1 disables it (high values can distort dialogue)
 # num_ctx = 8192                    # Ollama context window; raise when attaching lore/ docs
 #                                   # (npc doctor suggests a value; larger windows use more VRAM)
 # api_key = ""                      # OpenAI-compatible servers only — stored in PLAINTEXT here;

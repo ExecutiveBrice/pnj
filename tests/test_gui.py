@@ -70,8 +70,8 @@ def test_desktop_player_gm_and_shutdown_controls(window):
     window.speech_target.set("Smith (smith)")
     for button in window.speech_buttons:
         button.invoke()
-    assert engine.sent[-4:] == [("speak_npc", {"npc": "smith", "attitude": attitude})
-                               for attitude in ("agacement", "amusant", "rude", "complaisant")]
+    assert engine.sent[-3:] == [("speak_npc", {"npc": "smith", "speech_action": action})
+                               for action in ("presentation", "fill_wait", "greeting")]
     window.record_button.invoke()
     assert all(str(button["state"]) == "disabled" for button in window.speech_buttons)
     window.record_button.invoke()
@@ -107,3 +107,63 @@ def test_desktop_saves_campaign_and_character_language(window):
     window.language.set("Suivre la campagne")
     window.change_language()
     assert load_config(Path(window.path.get())).language_for("character") == "fr-BE"
+
+
+@pytest.mark.parametrize("geometry", ["1000x800", "900x650"])
+def test_voice_tab_auditions_without_saving_and_can_stop(window, geometry):
+    from pathlib import Path
+
+    from npc.config import save_tts
+
+    class Engine:
+        process = None
+
+        def __init__(self):
+            self.calls = []
+            self.messages = queue.Queue()
+
+        def start(self, path, **options):
+            self.calls.append((path, options))
+            self.process = object()
+
+        def terminate(self):
+            self.messages.put({"kind": "exit", "code": -9})
+
+        def acknowledge_exit(self):
+            self.process = None
+
+    window.engine = engine = Engine()
+    path = Path(window.path.get())
+    window.tts_backend.set("Pocket TTS")
+    window.change_backend()
+    window.notebook.select(window.test_tab)
+    window.root.geometry(geometry)
+    window.root.update()
+    for widget in (window.test_voice_picker, window.test_text, window.test_listen_button,
+                   window.test_stop_button, window.test_refresh_button, window.log):
+        assert widget.winfo_ismapped()
+        assert widget.winfo_rooty() + widget.winfo_height() <= (
+            window.root.winfo_rooty() + window.root.winfo_height())
+    config_before = (path / "config.toml").read_bytes()
+    window.test_voice_choice.set("marius")
+    window.test_text.delete("1.0", "end")
+    window.test_text.insert("1.0", "Une voix d’essai, près du feu.")
+    window.test_listen_button.invoke()
+    assert engine.calls == [(path, {"microphone": False, "test_voice": "marius",
+                                    "test_text": "Une voix d’essai, près du feu."})]
+    assert (path / "config.toml").read_bytes() == config_before
+    assert str(window.start_button["state"]) == "disabled"
+    assert str(window.test_listen_button["state"]) == "disabled"
+    window.test_stop_button.invoke()
+    window.poll()
+    assert window.status.get() == "Test vocal arrêté"
+    assert str(window.test_listen_button["state"]) == "normal"
+    save_tts(path, backend="qwen")
+    save_tts(path, voice="A deep calm voice.")
+    window.refresh_voice()
+    assert tuple(window.test_voice_picker["values"]) == ("A deep calm voice.",)
+    # Broken campaign configuration must not leave old audition choices enabled.
+    (path / "config.toml").write_text("[broken", encoding="utf-8")
+    window.refresh_voice()
+    assert not window.test_voice_picker["values"]
+    assert str(window.test_listen_button["state"]) == "disabled"

@@ -22,8 +22,9 @@ class PcmSpeaker:
         raise NotImplementedError
 
     def say(self, text: str) -> None:
+        self._cancel.clear()
         samples, sample_rate = self.synthesize(text)
-        if len(samples):
+        if len(samples) and not self._cancel.is_set():
             self._play(samples, sample_rate)
 
     def _play(self, samples: np.ndarray, sample_rate: int) -> None:

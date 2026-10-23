@@ -140,8 +140,9 @@ def run_session(app, commands, emit) -> int:
                 elif action == "release":
                     app.on_ptt_release()
                 elif action == "speak_npc":
-                    if not app.speak_npc(command.get("npc"), command.get("attitude")):
-                        raise ValueError("prise de parole refusée : PNJ ou attitude invalide, "
+                    if not app.speak_npc(command.get("npc"),
+                                         action=command.get("speech_action")):
+                        raise ValueError("prise de parole refusée : PNJ ou action invalide, "
                                          "session terminée ou enregistrement en cours")
                 elif action == "line":
                     line = command.get("text", "")
@@ -170,12 +171,29 @@ def run_session(app, commands, emit) -> int:
     return 0
 
 
+def run_voice_test(config, voice, text, emit) -> int:
+    from .tts import SpeakerFactory, voice_test_text
+
+    text = voice_test_text(config) if text is None else text.strip()
+    if not text or len(text) > 500:
+        raise ValueError("Le texte de test doit contenir entre 1 et 500 caractères.")
+    emit(kind="log", text=f"Préparation et écoute de la voix {voice}…")
+    speaker = SpeakerFactory(config.tts)(config.tts.voice_resource_for(voice))
+    try:
+        speaker.say(text)
+    finally:
+        speaker.stop()
+    emit(kind="log", text="Écoute terminée.")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("campaign", type=Path)
     parser.add_argument("--prepare", action="store_true")
     parser.add_argument("--no-microphone", action="store_true")
     parser.add_argument("--test-voice", metavar="VOICE")
+    parser.add_argument("--test-text", metavar="TEXT")
     args = parser.parse_args(argv)
     output = sys.stdout
     lock = threading.Lock()
@@ -190,18 +208,7 @@ def main(argv=None) -> int:
         try:
             config = load_config(args.campaign)
             if args.test_voice:
-                from .tts import SpeakerFactory
-
-                factory = SpeakerFactory(config.tts)
-                emit(kind="log", text=f"Préparation et écoute de la voix {args.test_voice}…")
-                french = (config.tts.model.startswith("french") if config.tts.backend == "pocket"
-                          else config.language.startswith("fr"))
-                factory(config.tts.voice_resource_for(args.test_voice)).say(
-                    "Bonjour, voyageurs. Installez-vous près du feu. Que puis-je faire pour vous ?"
-                    if french else
-                    "Welcome, travellers. Come and sit by the fire.")
-                emit(kind="log", text="Écoute terminée.")
-                return 0
+                return run_voice_test(config, args.test_voice, args.test_text, emit)
             if args.prepare:
                 return prepare_models(config, emit)
             app = build_app(config, emit, microphone=not args.no_microphone)

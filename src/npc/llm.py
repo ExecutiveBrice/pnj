@@ -77,6 +77,8 @@ class _ChatClient:
     timeout_seconds: float = 60.0
     retries: int = 1
     num_ctx: int | None = None  # Ollama only; others manage context server-side
+    temperature: float | None = None
+    top_p: float | None = None
     _server_hint = "is it running?"
 
     def chat(self, system: str, messages: list[dict[str, str]]) -> str:
@@ -109,6 +111,11 @@ class _ChatClient:
 
     def _chat_stream(self, system: str, messages: list[dict[str, str]]):
         raise NotImplementedError
+
+    def _sampling_options(self, temperature: float | None = None) -> dict:
+        values = {"temperature": self.temperature if temperature is None else temperature,
+                  "top_p": self.top_p}
+        return {key: value for key, value in values.items() if value is not None}
 
     def _with_retry(self, call):
         """Retry connection-level failures ([llm].retries extra attempts);
@@ -203,7 +210,9 @@ class OllamaClient(_ChatClient):
     _server_hint = "is Ollama running? (`ollama serve`, check with `ollama ps`)"
 
     def __init__(self, host: str, model: str, timeout_seconds: float = 60.0,
-                 retries: int = 1, num_ctx: int | None = None, transport=None):
+                 retries: int = 1, num_ctx: int | None = None, transport=None, *,
+                 temperature: float | None = None, top_p: float | None = None,
+                 top_k: int | None = None, repeat_penalty: float | None = None):
         import ollama
 
         self.host = host
@@ -211,6 +220,10 @@ class OllamaClient(_ChatClient):
         self.timeout_seconds = timeout_seconds
         self.retries = retries
         self.num_ctx = num_ctx  # context window; None = the server's default
+        self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.repeat_penalty = repeat_penalty
         # extra kwargs are forwarded to the underlying httpx.Client
         self._client = ollama.Client(host=host, timeout=timeout_seconds,
                                      transport=transport)
@@ -218,8 +231,10 @@ class OllamaClient(_ChatClient):
     def _options(self, temperature: float | None = None) -> dict | None:
         # summaries flow through chat() too, so they get the window as well
         options = {"num_ctx": self.num_ctx} if self.num_ctx else {}
-        if temperature is not None:
-            options["temperature"] = temperature
+        options.update(self._sampling_options(temperature))
+        for key in ("top_k", "repeat_penalty"):
+            if (value := getattr(self, key)) is not None:
+                options[key] = value
         return options or None
 
     def _chat(self, system: str, messages: list[dict[str, str]], *,
@@ -283,7 +298,8 @@ class OpenAICompatClient(_ChatClient):
     _server_hint = "is your server (Jan / LM Studio / llama.cpp / vLLM) running?"
 
     def __init__(self, host: str, model: str, timeout_seconds: float = 60.0,
-                 retries: int = 1, api_key: str = "", transport=None):
+                 retries: int = 1, api_key: str = "", transport=None, *,
+                 temperature: float | None = None, top_p: float | None = None):
         import httpx
 
         base = host.rstrip("/")
@@ -294,6 +310,8 @@ class OpenAICompatClient(_ChatClient):
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.retries = retries
+        self.temperature = temperature
+        self.top_p = top_p
         # one client, so the header covers chat, chat_stream, and /models alike
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
         self._http = httpx.Client(base_url=base, timeout=timeout_seconds,
@@ -307,8 +325,7 @@ class OpenAICompatClient(_ChatClient):
             "model": self.model,
             "messages": [{"role": "system", "content": system}, *messages],
         }
-        if temperature is not None:
-            payload["temperature"] = temperature
+        payload.update(self._sampling_options(temperature))
         response = self._http.post("/chat/completions", json=payload)
         try:
             response.raise_for_status()
@@ -325,6 +342,7 @@ class OpenAICompatClient(_ChatClient):
             "model": self.model,
             "messages": [{"role": "system", "content": system}, *messages],
             "stream": True,
+            **self._sampling_options(),
         }) as response:
             if response.status_code >= 400:
                 response.read()
@@ -357,11 +375,14 @@ def make_llm_client(llm_config) -> _ChatClient:
     if backend == "ollama":
         return OllamaClient(llm_config.host, llm_config.model,
                             llm_config.timeout_seconds, llm_config.retries,
-                            num_ctx=llm_config.num_ctx)
+                            num_ctx=llm_config.num_ctx, temperature=llm_config.temperature,
+                            top_p=llm_config.top_p, top_k=llm_config.top_k,
+                            repeat_penalty=llm_config.repeat_penalty)
     if backend == "openai-compatible":
         return OpenAICompatClient(llm_config.host, llm_config.model,
                                   llm_config.timeout_seconds, llm_config.retries,
-                                  api_key=llm_config.api_key)
+                                  api_key=llm_config.api_key, temperature=llm_config.temperature,
+                                  top_p=llm_config.top_p)
     raise ConfigError(
         f"unknown llm backend {llm_config.backend!r} — use \"ollama\" or "
         f"\"openai\" (aliases: {', '.join(sorted(set(_BACKEND_ALIASES) - {'ollama'}))})"

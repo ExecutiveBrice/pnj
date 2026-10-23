@@ -22,6 +22,7 @@ font partie du paquet installé et se lisent avec `importlib.resources`.
 | `overlay.py`, `static/overlay.html` | Affichage OBS et diffusion WebSocket |
 | `mobile_server.py`, `mobile_protocol.py`, `static/mobile.html` | Compagnon mobile, commandes et PCM |
 | `voice_studio.py`, `voice_design.py` | Histoires et exports WAV, génération depuis TOML/JSON |
+| `voice_controls.py` | Validation des réglages du studio, consignes acoustiques et transposition/tempo du PCM |
 | `doctor.py` | Contrôles des fichiers, voix, modèles, contexte et périphériques |
 | `tests/` | Tests autonomes, tests de services réels et tests Tk optionnels |
 | `scripts/` | Sondes manuelles des prompts avec un vrai LLM |
@@ -67,26 +68,35 @@ La disposition complète est présentée dans [README.md](README.md).
 journal, tours à résumer, secrets, lore et voix. Changer de PNJ change le slot.
 Les résumés et journaux n'assemblent jamais les conversations de plusieurs PNJ.
 `/reload` actualise les fichiers et conserve les conversations déjà en mémoire.
-Au démarrage et lors d'une sélection explicite, le worker génère un court accueil
-avec le contexte du slot et le même pipeline de langue, de dialogue et de voix.
-La consigne d'ouverture est ponctuelle : seul l'accueil du PNJ entre dans son
-historique et la transcription, sans faux tour joueur ni demande de secret.
-Le dernier accueil reste dans le slot pour éviter de le recopier, même après
-la réduction de l'historique. Un retour interne pour livrer un secret approuvé
-ne déclenche pas d'accueil supplémentaire.
+Le démarrage, la sélection d'un PNJ et `/reload` ne génèrent aucune réplique.
+Le worker attend une parole du joueur, une prise de parole explicite du MJ ou
+une livraison de secret approuvé avant de solliciter le modèle de dialogue.
 
-`NPCApp.speak_npc(id, attitude)` soumet une prise de parole MJ ciblée au même
-worker. Les identifiants d’attitude sont partagés par le bureau et le mobile :
-`agacement`, `amusant`, `rude`, `complaisant`. Le worker sélectionne le slot sans
-accueil intermédiaire, puis génère une unique réplique avec une consigne de ton
-ponctuelle. Cette consigne reste présente lors d’une reprise anti-répétition,
-mais n’entre ni dans l’historique ni dans les notes permanentes. Seules les
+`NPCApp.speak_npc(id, action=None)` soumet une prise de parole MJ ciblée au
+même worker. Les actions `presentation`, `fill_wait` et `greeting` sont partagées
+par le bureau et le mobile. Le worker sélectionne le slot sans réplique
+intermédiaire, puis génère une unique réplique fondée sur sa fiche et le contexte
+de sa session. La personnalité, l'attitude et la façon de parler viennent de la
+fiche ; aucun ton externe n'est injecté. L'ancien argument `attitude` reste
+accepté par l'API Python mais est ignoré et n'entre pas dans la file du worker.
+La consigne d'action reste présente lors d'une reprise anti-répétition,
+mais n'entre ni dans l'historique ni dans les notes permanentes. Seules les
 paroles prononcées sont mémorisées. Le pipeline conserve ses protections de
-secrets, sa langue, sa voix et son annulation audio.
-Le bureau transmet l’action JSON `speak_npc` avec `npc` et `attitude` ; son
-sélecteur reçoit la roster au démarrage, aux changements de PNJ et au rechargement.
-Le WebSocket mobile accepte le même message uniquement pour une connexion MJ ;
-`gm_npc_list.speech_attitudes` fournit les quatre identifiants et libellés au client.
+secrets, sa langue, sa voix attribuée dans la campagne et son annulation audio.
+Le bureau transmet l'action JSON `speak_npc` avec `npc` et `speech_action`
+(le champ `action` désigne déjà la commande du protocole bureau) ; son sélecteur
+reçoit la roster au démarrage, aux changements de PNJ et au rechargement.
+Le WebSocket mobile accepte `speak_npc` avec `npc` et `action` uniquement pour
+une connexion MJ ; `gm_npc_list.speech_actions` fournit les identifiants et
+libellés disponibles. Les anciens champs `attitude` des messages bureau et
+mobile sont ignorés. Sans action, le PNJ réagit à la situation actuelle ;
+une action inconnue est rejetée avant tout changement de PNJ.
+`split_character_speech()` sépare les références Introduction, Meuble et Salutation
+du contexte permanent de la fiche, qu'elles soient des puces de métadonnées ou
+des sections de niveau 2. `_speak_npc()` ajoute uniquement la référence de l'action
+choisie à sa consigne ponctuelle ; `/reload` relit la fiche sans remplacer la mémoire.
+Les puces de `## Secrets` restent des confidences locales avec leurs conditions ;
+les secrets soumis à autorisation conservent leur fichier et leur filtrage distincts.
 
 Le lore comprend uniquement les fichiers directs `.md`, `.txt`, `.pdf` du dossier
 prévu et, pour une zone, son `lore.md` explicite. Les scénarios MJ et les autres
@@ -101,6 +111,22 @@ Le prompt conserve une partie stable en tête (règles, fiche, lore) pour facili
 la réutilisation du contexte par le serveur LLM. Secrets autorisés, mémoire et
 notes peuvent changer à chaque tour. `doctor` estime le volume du contexte ;
 l'estimation sert à avertir, ce n'est pas un comptage exact de tokens.
+
+Les consignes de dialogue françaises et anglaises demandent de conserver les
+rôles de l'échange (propriétaire, prestataire, payeur et bénéficiaire), d'interpréter
+les réponses courtes dans ce contexte et de distinguer proposition, accord et
+action accomplie. Une réplique antérieure qui inverse ces rôles doit être
+rectifiée. Il s'agit d'un guidage du modèle, sans validation sémantique automatique ;
+la sonde manuelle `probe_narration.py --coherence` permet d'en examiner les limites.
+Elle comprend les transferts d'objets dans les deux sens et les intentions qui
+ne doivent pas devenir des dons ou livraisons déjà effectués.
+
+`LlmConfig` expose les réglages facultatifs d'échantillonnage `temperature` et
+`top_p` pour les deux backends, ainsi que `top_k` et `repeat_penalty` pour Ollama.
+Les clients transmettent les valeurs configurées en mode complet et en streaming,
+sans remplacer les valeurs du serveur si elles sont absentes. Le routage des
+secrets conserve sa surcharge locale de température à zéro sans modifier le
+réglage des dialogues. La fenêtre `num_ctx` reste propre à Ollama.
 
 ## Secrets, événements et réseau
 
@@ -133,10 +159,34 @@ s’ajoutent au compteur des secrets soumis à autorisation, avec un statut dist
 Les corps sont chargés dans le navigateur au clic, effacés au masquage ou à la
 déconnexion et ne passent pas par le stockage hors ligne du studio.
 
+La commande mobile MJ `reset_session` appelle `NPCApp.reset_session()` hors de
+la boucle réseau. Cette méthode signale l'annulation, arrête la voix et tout
+enregistrement local, puis soumet le nettoyage au worker. Celui-ci abandonne
+les actions antérieures en attente et les résultats des appels de modèles
+encore en cours, prépare de nouveaux `CharacterSlot` avec un cache de lore
+limité à ce chargement, puis nettoie les dossiers `session/` et `sessions/`.
+`session/reset.py` valide tous les chemins avant suppression et refuse les
+liens et points de réanalyse Windows ; il ne parcourt aucun autre dossier de
+campagne. Les journaux et autorisations persistants sont conservés.
+
+Pendant ce traitement, le serveur refuse les nouvelles commandes et connexions,
+annule le studio vocal et attend sa fin. Il vide les téléversements PCM de tous
+les clients et les files de sortie, puis resynchronise l'état et les demandes
+MJ. Seul le demandeur reçoit `session_reset`, après réussite des deux pipelines
+et du nettoyage. Un échec produit une erreur générique sans exposer de chemin
+ni confirmer la réinitialisation. Le client peut réessayer ; une suppression
+partielle due à une erreur disque n'est pas restaurée automatiquement.
+La tâche de réinitialisation continue si le demandeur se déconnecte ; le
+serveur garde les commandes bloquées jusqu'à la fin effective du traitement.
+
 Les serveurs écoutent sur loopback par défaut. Activer l'écoute LAN donne accès
 aux appareils du réseau sans authentification par défaut. Les publications audio
 observent le PCM déjà synthétisé, sans deuxième synthèse. Les files sortantes
 sont bornées et les clients trop lents sont déconnectés.
+
+Les connexions TCP fermées avant l'envoi du moindre octet HTTP sont journalisées
+en debug par les serveurs mobile et overlay. Les requêtes HTTP incomplètes ou
+invalides et les autres erreurs de connexion restent signalées comme erreurs.
 
 Le studio vocal dispose de son propre client LLM ; il reçoit l'idée d'histoire
 et la langue, sans les fiches, secrets ni conversations. Ses travaux annulables

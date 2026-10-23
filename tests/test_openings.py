@@ -1,14 +1,15 @@
-"""NPC-led openings use session context and the regular, interruptible pipeline."""
+"""Loading stays silent; explicit GM speech uses the regular, interruptible pipeline."""
 
 import pytest
 
 from npc.app import NPCApp
-from npc.attitudes import SPEECH_ATTITUDES
+from npc.session.prompt import opening_instruction
 from npc.events import (
     ErrorOccurred,
     GmNoteAdded,
     NpcReplied,
     NpcReplyChunk,
+    NpcSwitched,
     PlayerSpoke,
     SecretDisclosureRequested,
     State,
@@ -51,7 +52,44 @@ def make_app(config, campaign):
 
 
 @pytest.mark.parametrize("language", ["en", "fr", "fr-CA"])
-def test_start_opens_with_context_without_a_player_turn(make_app, config, language):
+def test_loading_and_selecting_npcs_never_generate_speech(make_app, config, language):
+    config.language = language
+    app = make_app()
+    merchant = app.active
+    merchant.history.add_player("I will bring you a new wheel.")
+    merchant.ooc_notes.append("Keep the wheel for the players.")
+    history = merchant.history.as_messages()
+    assert not app.llm.calls
+
+    app.start()
+    drain(app)
+    assert app.state is State.IDLE
+    assert not of_type(app, StateChanged)
+    for npc in ("character", "smith", "smith", "character"):
+        assert app.switch_npc(npc)
+        drain(app)
+        assert app.active.stem == npc
+        assert app.state is State.IDLE
+    app.handle_line("/npc smith")
+    drain(app)
+    assert app.active.stem == "smith"
+    app.handle_line("/reload")
+    drain(app)
+
+    assert [e.npc_name for e in of_type(app, NpcSwitched)] == ["Smith", "Lila", "Smith"]
+    assert merchant.history.as_messages() == history
+    assert merchant.ooc_notes == ["Keep the wheel for the players."]
+    assert not app.roster["smith"].history.as_messages()
+    assert not app.llm.calls
+    assert not app.speaker.spoken
+    assert not app.transcript.read()
+    assert not of_type(app, NpcReplied)
+    assert not of_type(app, StateChanged)
+    assert not of_type(app, ErrorOccurred)
+
+
+@pytest.mark.parametrize("language", ["en", "fr", "fr-CA"])
+def test_explicit_speech_uses_context_without_a_player_turn(make_app, config, language):
     config.language = language
     app = make_app()
     app.llm.reply = ("Bienvenue dans ma boutique. [CHECK:teleporter-key]"
@@ -62,6 +100,7 @@ def test_start_opens_with_context_without_a_player_turn(make_app, config, langua
     app.active.history.add_player("I will bring you a new wheel.")
 
     app.start()
+    assert app.speak_npc("character")
     drain(app)
 
     system, messages = app.llm.calls[0]
@@ -88,18 +127,19 @@ def test_start_opens_with_context_without_a_player_turn(make_app, config, langua
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_reselect_generates_and_retries_even_a_short_repeated_opening(make_app, streaming):
+def test_explicit_speech_retries_even_a_short_repeated_reply(make_app, streaming):
     old, new = "Welcome, traveler.", "Come and browse my wares."
     llm = StreamingFakeLLM([old]) if streaming else FakeLLM()
     llm.reply = old
     speaker = StreamingFakeSpeaker() if streaming else FakeSpeaker()
     app = make_app(llm=llm, speaker=speaker)
     app.start()
+    assert app.speak_npc("character")
     drain(app)
     app.events.clear()
     llm.replies = [new] if streaming else [old, new]
 
-    assert app.switch_npc("character")  # reopening the already active NPC
+    assert app.speak_npc("character")
     drain(app)
 
     assert speaker.spoken == [old, new]
@@ -118,6 +158,7 @@ def test_returning_to_a_character_uses_only_their_session_and_voice(make_app, co
     app.llm.replies = ["Welcome to my wagon.", "I saved a wheel for you.",
                        "Welcome to my forge.", "Good to see you back at the wagon."]
     app.start()
+    assert app.speak_npc("character")
     drain(app)
     merchant = app.active
     merchant_speaker = app.speaker
@@ -125,13 +166,14 @@ def test_returning_to_a_character_uses_only_their_session_and_voice(make_app, co
     app.submit_player_text("This wheel is our agreement.")
     drain(app)
     assert app.switch_npc("smith")
+    assert app.speak_npc("smith")
     drain(app)
     assert app.speaker is not merchant_speaker
     assert app.speaker.spoken == ["Welcome to my forge."]
     assert "wheel" not in str(app.llm.calls[-1])
     app.handle_line("Forge a royal sword in secret.")
     drain(app)
-    assert app.switch_npc("character")
+    assert app.speak_npc("character")
     drain(app)
 
     system, messages = app.llm.calls[-1]
@@ -149,34 +191,36 @@ def test_last_opening_survives_history_trimming_and_reload(make_app, config):
     app = make_app()
     app.llm.reply = "Welcome to my shop."
     app.start()
+    assert app.speak_npc("character")
     drain(app)
     for n in range(4):
         app.active.history.add_npc(f"An unrelated reply number {n}.")
     app.handle_line("/reload")
     assert app.active.last_opening == "Welcome to my shop."
     app.llm.replies = ["Welcome to my shop.", "Come inside, the market is closing."]
-    assert app.switch_npc("character")
+    assert app.speak_npc("character")
     drain(app)
     assert app.speaker.spoken == ["Welcome to my shop.", "Come inside, the market is closing."]
 
 
-def test_repeated_opening_retry_is_bounded_and_worker_remains_usable(make_app):
+def test_repeated_speech_retry_is_bounded_and_worker_remains_usable(make_app):
     app = make_app()
     app.start()
+    assert app.speak_npc("character")
     drain(app)
-    assert app.switch_npc("character")
+    assert app.speak_npc("character")
     drain(app)
     assert len(app.llm.calls) == 3  # initial opening, repeated attempt, one retry
     assert len(app.speaker.spoken) == 1
     assert of_type(app, ErrorOccurred)
     assert app.state is State.IDLE
     app.llm.reply = "Please browse the wagon before sunset."
-    assert app.switch_npc("character")
+    assert app.speak_npc("character")
     drain(app)
     assert app.speaker.spoken[-1] == app.llm.reply
 
 
-def test_failed_opening_does_not_prevent_a_player_turn(make_app):
+def test_failed_explicit_speech_does_not_prevent_a_player_turn(make_app):
     app = make_app()
     chat = app.llm.chat
 
@@ -185,6 +229,7 @@ def test_failed_opening_does_not_prevent_a_player_turn(make_app):
 
     app.llm.chat = fail
     app.start()
+    assert app.speak_npc("character")
     drain(app)
     assert of_type(app, ErrorOccurred)
     assert not app.history.as_messages()
@@ -196,10 +241,11 @@ def test_failed_opening_does_not_prevent_a_player_turn(make_app):
     assert app.speaker.spoken == ["Greetings, traveler."]
 
 
-def test_cancelled_opening_records_only_heard_words(make_app):
+def test_cancelled_explicit_speech_records_only_heard_words(make_app):
     app = make_app(llm=StreamingFakeLLM(["Welcome to my wagon. Browse my wares."]),
                    speaker=StreamingFakeSpeaker(cancel_after=1))
     app.start()
+    assert app.speak_npc("character")
     drain(app)
     assert app.active.last_opening == "Welcome to my wagon."
     assert app.history.as_messages() == [
@@ -210,12 +256,11 @@ def test_cancelled_opening_records_only_heard_words(make_app):
 
 def test_internal_switch_for_secret_delivery_does_not_add_an_opening(make_app):
     app = make_app()
-    app.start(greet=False)
+    app.start()
     app.llm.reply = "A moment, please. [CHECK:teleporter-key]"
     app.submit_player_text("Where is the key?")
     drain(app)
     request_id = app.active.pending_disclosure.request_id
-    app.llm.reply = "Welcome to my forge."
     app.switch_npc("smith")
     drain(app)
     before = len(app.llm.calls)
@@ -228,9 +273,12 @@ def test_internal_switch_for_secret_delivery_does_not_add_an_opening(make_app):
     assert app.speaker.spoken[-1] == app.llm.reply
 
 
-@pytest.mark.parametrize("attitude", SPEECH_ATTITUDES)
+@pytest.mark.parametrize("attitude", [
+    "agacement", "amusant", "rude", "complaisant",
+    "humoriste", "hargneux", "presse", "joyeux", "invented", [],
+])
 @pytest.mark.parametrize("language", ["en", "fr-CA"])
-def test_attitude_speech_is_targeted_transient_and_does_not_unlock_secrets(
+def test_legacy_attitude_is_ignored_without_changing_speech_guards(
         make_app, config, attitude, language):
     config.language = language
     secret_path = config.campaign_dir / "secrets/smith.md"
@@ -240,7 +288,7 @@ def test_attitude_speech_is_targeted_transient_and_does_not_unlock_secrets(
     app.llm.reply = ("Bienvenue dans ma forge. [CHECK:teleporter-key]"
                      if language.startswith("fr") else
                      "Welcome to my forge. [CHECK:teleporter-key]")
-    app.start(greet=False)
+    app.start()
     merchant = app.active
     smith = app.roster["smith"]
     smith.ooc_notes.append("The forge is closed today.")
@@ -250,13 +298,11 @@ def test_attitude_speech_is_targeted_transient_and_does_not_unlock_secrets(
     drain(app)
 
     assert app.active is smith
-    assert len(app.llm.calls) == 1  # no neutral greeting before the styled reply
+    assert len(app.llm.calls) == 1  # a single requested reply
     system, messages = app.llm.calls[0]
     cue = messages[-1]["content"]
-    labels = {"agacement": ("Annoyance", "Agacement"),
-              "amusant": ("Amusing", "Amusant"), "rude": ("Rude", "Rude"),
-              "complaisant": ("Accommodating", "Complaisant")}
-    assert labels[attitude][int(language.startswith("fr"))] in cue
+    assert cue == opening_instruction(language)
+    assert "A gruff smith." in system
     assert "GM NOTE (out-of-character)" in cue
     assert "Our special agreement" in str(messages)
     assert "forge is closed" in system
@@ -277,12 +323,12 @@ def test_attitude_speech_is_targeted_transient_and_does_not_unlock_secrets(
     assert cue not in str(app.llm.calls[-1])
 
 
-def test_attitude_speech_preserves_voice_queue_order_and_each_npcs_history(make_app, config):
+def test_speech_preserves_voice_queue_order_and_each_npcs_history(make_app, config):
     config.tts.voices["smith"] = "en_GB-test-voice"
     factory = FakeSpeakerFactory()
     app = make_app(make_speaker=factory)
     app.llm.replies = ["The wagon is ready.", "Mind the forge, travelers.", "What a fine wagon!"]
-    app.start(greet=False)
+    app.start()
     merchant = app.active
     assert app.submit_player_text("Is the wagon ready?")
     assert app.speak_npc("smith", "rude")
@@ -295,35 +341,67 @@ def test_attitude_speech_preserves_voice_queue_order_and_each_npcs_history(make_
         {"role": "assistant", "content": "Mind the forge, travelers."}]
     assert app._speaker_for(app.roster["smith"]).spoken == ["Mind the forge, travelers."]
     assert app.speaker.spoken == ["The wagon is ready.", "What a fine wagon!"]
-    assert "curt, gruff and blunt" in str(app.llm.calls[1])
-    assert "playful, funny" in str(app.llm.calls[2])
-    assert "curt, gruff and blunt" not in str(app.llm.calls[2])
+    assert app.llm.calls[1][1][-1]["content"] == opening_instruction("en")
+    assert app.llm.calls[2][1][-1]["content"] == opening_instruction("en")
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_attitude_survives_repetition_retry(make_app, streaming):
+def test_sheet_based_speech_survives_repetition_retry(make_app, streaming):
     llm = StreamingFakeLLM(["Welcome, traveler."]) if streaming else FakeLLM()
     llm.reply = "Welcome, traveler."
     speaker = StreamingFakeSpeaker() if streaming else FakeSpeaker()
     app = make_app(llm=llm, speaker=speaker)
     app.start()
+    assert app.speak_npc("character")
     drain(app)
     llm.replies = (["Move along, traveler."] if streaming
                    else ["Welcome, traveler.", "Move along, traveler."])
-    assert app.speak_npc("character", "rude")
+    assert app.speak_npc("character")
     drain(app)
-    assert "curt, gruff and blunt" in app.llm.calls[-1][1][-1]["content"]
+    assert app.llm.calls[-1][1][-1]["content"].startswith(opening_instruction("en"))
     assert speaker.spoken == ["Welcome, traveler.", "Move along, traveler."]
 
 
-@pytest.mark.parametrize("npc,attitude", [
-    (None, "rude"), ([], "rude"), ("unknown", "rude"), ("SMITH", "rude"),
-    ("smith", None), ("smith", []), ("smith", "invented"),
+@pytest.mark.parametrize("npc,action", [
+    (None, None), ([], None), ("unknown", None), ("SMITH", None),
+    ("smith", []), ("smith", {}), ("smith", "invented"),
 ])
-def test_invalid_speech_cues_do_not_generate_or_switch(make_app, npc, attitude):
+def test_invalid_speech_cues_do_not_generate_or_switch(make_app, npc, action):
     app = make_app()
-    app.start(greet=False)
-    assert not app.speak_npc(npc, attitude)
+    app.start()
+    assert not app.speak_npc(npc, action=action)
     drain(app)
     assert app.active.stem == "character"
     assert not app.llm.calls
+
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("action,expected", [
+    ("presentation", "Introduction:"),
+    ("fill_wait", "Fill the wait:"),
+    ("greeting", "Greeting:"),
+])
+def test_action_and_sheet_reference_survive_repetition_retry(make_app, streaming, action, expected):
+    llm = StreamingFakeLLM(["Welcome, traveler."]) if streaming else FakeLLM()
+    llm.reply = "Welcome, traveler."
+    speaker = StreamingFakeSpeaker() if streaming else FakeSpeaker()
+    app = make_app(llm=llm, speaker=speaker)
+    app.active.character += ("\n- Introduction : REFERENCE INTRODUCTION\n"
+                             "- Meuble : REFERENCE WAIT\n- Salutation : REFERENCE FAREWELL\n")
+    app.start()
+    assert app.speak_npc("character", action=action)
+    drain(app)
+    llm.replies = (["Come inside, traveler."] if streaming
+                   else ["Welcome, traveler.", "Come inside, traveler."])
+    assert app.speak_npc("character", action=action)
+    drain(app)
+    cue = app.llm.calls[-1][1][-1]["content"]
+    assert expected in cue
+    assert "Joyful:" not in cue
+    reference = {"presentation": "REFERENCE INTRODUCTION", "fill_wait": "REFERENCE WAIT",
+                 "greeting": "REFERENCE FAREWELL"}[action]
+    assert reference in cue
+    assert reference not in app.llm.calls[-1][0]
+    assert "REFERENCE" not in str(app.history.as_messages())
+    assert speaker.spoken == ["Welcome, traveler.", "Come inside, traveler."]

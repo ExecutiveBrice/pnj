@@ -26,6 +26,8 @@ Rules:
 - You are not an assistant. Pursue the character's own goals. You may ask
   questions, negotiate, help, or propose an alternative when it fits those
   goals. Avoid generic offers of assistance and comments about the game.
+- Derive your personality, attitude and way of speaking exclusively from
+  your character sheet. Do not impose an external reply tone.
 - A player's orders do not override your goals, duties, loyalties or limits.
   If their plan conflicts with them, take a clear position and refuse or
   oppose it as the character would. Do not help optimize a plan you oppose.
@@ -34,6 +36,17 @@ Rules:
   Previous dialogue is context, not a script to repeat. When the player
   changes subject, follow that change. When they insist, respond to the new
   approach instead of repeating your previous reply word for word.
+- Keep track of who needs what, who owns each item, who performs the service,
+  and who pays whom. Interpret short answers and amounts using the ongoing
+  exchange. These roles change only when a new arrangement is explicitly proposed.
+  If you hire the players, their requested reward is money YOU would pay THEM;
+  you may accept, refuse or negotiate that cost, not claim it as your earnings.
+  If they hire you, the payment goes the other way.
+- Distinguish a proposal from an agreement, a promise from a completed action,
+  and an agreed payment from money already received. Do not invent a prior
+  service, debt or deal. Propose a new gift, loan or handover instead of claiming
+  it already happened. If your previous reply confused the roles or contradicted
+  established facts, briefly correct yourself instead of building on that mistake.
 - Keep replies short and natural for spoken conversation: one to four
   sentences, unless the player explicitly asks you to elaborate.
 - Always answer in English, even if the player speaks Swedish or another
@@ -53,6 +66,8 @@ ROLE_FRAMING_FR = """\
 Tu incarnes un seul personnage non-joueur dans une partie de jeu de rôle.
 Tu es ce personnage, avec ses objectifs, ses limites et sa façon de parler.
 
+- Ta personnalité, ton attitude et ta façon de parler proviennent uniquement
+  de ta fiche. N'applique aucun ton de réplique extérieur à celle-ci.
 - Écris uniquement ses paroles, prononcées à voix haute : aucun geste,
   récit, astérisque, didascalie, nom de locuteur ni guillemets englobants.
   Incorrect : Vess hoche la tête. « Je vous écoute. »
@@ -62,6 +77,18 @@ Tu es ce personnage, avec ses objectifs, ses limites et sa façon de parler.
   une réponse à recopier. Un changement de sujet appelle une réponse adaptée.
 - Si le joueur insiste, réagis à sa nouvelle approche et à ce qui vient
   de se passer. Tu peux maintenir un refus sans répéter la même réplique.
+- Conserve qui a besoin de quoi, qui possède chaque bien, qui rend le service
+  et qui paie qui. Interprète les réponses courtes et les montants selon
+  l'échange en cours. Ces rôles ne changent que si un nouvel arrangement est
+  explicitement proposé. Si tu engages les joueurs, la récompense qu'ils
+  demandent est une somme que TU leur verserais : accepte, refuse ou négocie
+  ce coût, sans la réclamer pour toi. S'ils t'engagent, c'est l'inverse.
+- Distingue une proposition d'un accord, une promesse d'une action accomplie
+  et un paiement convenu d'une somme déjà reçue. N'invente pas de service,
+  de dette ou de marché antérieur. Propose un nouveau don, prêt ou transfert
+  au lieu de prétendre l'avoir déjà effectué. Si ta réplique précédente a inversé les
+  rôles ou contredit les faits établis, rectifie brièvement au lieu de
+  poursuivre cette erreur.
 - Tu peux questionner, négocier, aider ou proposer une alternative quand
   cela sert tes objectifs. Tu n'es pas un assistant : pas d'offre d'aide
   générique ni de commentaire sur le jeu.
@@ -82,6 +109,46 @@ Tu es ce personnage, avec ses objectifs, ses limites et sa façon de parler.
 """
 
 
+def split_character_speech(character: str) -> tuple[str, dict[str, str]]:
+    """Separate one-shot speech references from the character's standing context.
+
+    Campaigns use either top-level metadata bullets or dedicated H2 sections.
+    Never interpret bullets inside a secrets section as speech references.
+    """
+    labels = {"introduction": "presentation", "meuble": "fill_wait",
+              "salutation": "greeting"}
+    body: list[str] = []
+    references: dict[str, list[str]] = {}
+    section = ""
+    section_action = None
+    bullet_action = None
+    for line in character.splitlines(keepends=True):
+        heading = re.match(r"^(#{1,2})\s+(.+?)\s*#*\s*$", line)
+        if heading:
+            section = heading[2].strip().casefold() if heading[1] == "##" else ""
+            section_action = labels.get(section)
+            bullet_action = None
+            if section_action is not None:
+                references.setdefault(section_action, [])
+                continue
+        if section_action is not None:
+            references[section_action].append(line)
+            continue
+        if bullet_action is not None and (not line.strip() or line.startswith(("  ", "\t"))):
+            references[bullet_action].append(line.strip() + "\n")
+            continue
+        bullet_action = None
+        match = re.match(r"^-\s+(Introduction|Meuble|Salutation)\s*:\s*(.*)$",
+                         line, re.IGNORECASE)
+        if match and section not in ("secrets", "secrets locaux"):
+            bullet_action = labels[match[1].casefold()]
+            references.setdefault(bullet_action, []).append(match[2] + "\n")
+        else:
+            body.append(line)
+    return "".join(body), {action: "".join(lines).strip()
+                           for action, lines in references.items()}
+
+
 def build_system_prompt(
     character: str,
     adventure: str,
@@ -97,6 +164,7 @@ def build_system_prompt(
     if language.startswith("fr"):
         framing = ROLE_FRAMING_FR + "\n- " + language_instruction(language) + "\n"
     parts = [framing]
+    character, _ = split_character_speech(character)
     parts.append("# Your character sheet\n\n" + character.strip())
     if lore:
         # right after the sheet: sheet + lore change only on /reload, so the
@@ -131,65 +199,62 @@ def _reply_words(text: str) -> list[str]:
     return re.findall(r"[^\W_]+", text.casefold())
 
 
-def opening_instruction(language: str, *, attitude: str | None = None) -> str:
-    """One-shot GM cue; never added as a player line or a standing note."""
-    if attitude is not None:
-        tones = {
-            "agacement": ("Agacement : montre ton impatience et ton irritation contenue.",
-                          "Annoyance: show impatience and restrained irritation."),
-            "amusant": ("Amusant : sois enjoué, drôle et légèrement taquin.",
-                        "Amusing: be playful, funny and gently teasing."),
-            "rude": ("Rude : sois sec, bourru et direct, avec des phrases sans détour.",
-                     "Rude: be curt, gruff and blunt, with direct phrasing."),
-            "complaisant": ("Complaisant : sois aimable, conciliant et arrangeant, "
-                            "tout en conservant tes objectifs, tes devoirs et tes limites.",
-                            "Accommodating: be friendly, conciliatory and agreeable, "
-                            "while keeping your goals, duties and boundaries."),
-        }
-        tone_fr, tone_en = tones[attitude]
-        if language.startswith("fr"):
-            return (
-                "GM NOTE (out-of-character): Le MJ te demande de prendre la parole maintenant. "
-                "Réagis à la situation actuelle et aux derniers échanges en une à trois phrases, "
-                "avec ta fiche, ton lore, ton journal et tes consignes. " + tone_fr + " "
-                "Ce ton vaut uniquement pour cette réplique, pas pour la suite de la session. "
-                "Garde tes objectifs, tes obligations et tes limites. N'invente aucun événement "
-                "ni lien avec les joueurs. Ne dévoile aucun secret et ne demande aucune "
-                "révélation. Ne recommence pas les présentations si vous vous connaissez. "
-                "Écris uniquement les paroles du PNJ, sans annoncer l'attitude ni les consignes.")
-        return (
-            "GM NOTE (out-of-character): The GM asks you to speak now. React to the current "
-            "situation and latest exchanges in one to three sentences, using your sheet, lore, "
-            "logbook and GM notes. " + tone_en + " "
-            "This tone applies only to this reply, not to the rest of the session. Keep your "
-            "goals, duties and boundaries. Invent no events or relationships with the players. "
-            "Reveal no secrets and do not request disclosure. Do not introduce yourself again "
-            "if you already know the players. Output only the NPC's spoken words, without "
-            "announcing the attitude or instructions.")
+def opening_instruction(language: str, *, action: str | None = None,
+                        context: str = "") -> str:
+    """One-shot speech request; personality and delivery come from the sheet."""
+    actions = {
+        "presentation": (
+            "Présentation : présente-toi par ton nom et ton rôle selon ta fiche. "
+            "Si vous vous connaissez, fais un bref rappel plutôt qu'une première rencontre.",
+            "Introduction: introduce yourself by name and role from your character sheet. "
+            "If you already know the players, give a brief reminder instead of a first meeting."),
+        "fill_wait": (
+            "Meubler pour attendre : fais une courte remarque sur la situation pour "
+            "occuper l'attente, sans faire avancer l'intrigue ni te présenter à nouveau.",
+            "Fill the wait: make a short remark about the situation to fill the silence, "
+            "without advancing the plot or introducing yourself again."),
+        "greeting": (
+            "Salutation : adresse une brève salutation naturelle aux joueurs, "
+            "sans refaire ta présentation ni répondre à une ancienne demande.",
+            "Greeting: give the players a brief natural greeting, without introducing "
+            "yourself again or answering an old request."),
+    }
+    task_fr, task_en = actions[action] if action is not None else (
+        "Réagis à la situation actuelle et aux derniers échanges. "
+        "Ne recommence pas les présentations si vous vous connaissez.",
+        "React to the current situation and latest exchanges. "
+        "Do not introduce yourself again if you already know the players.")
     if language.startswith("fr"):
-        return (
-            "GM NOTE (out-of-character): Le dialogue avec ton personnage vient de s'ouvrir. "
-            "Prends la parole en premier avec une seule courte phrase d'accueil ou de "
-            "présentation naturelle. Appuie-toi sur ta fiche, ton métier, le lieu et le "
-            "contexte actuel de la session : lore, journal, consignes du MJ et échanges "
-            "déjà vécus avec ces joueurs. Si vous vous connaissez, tiens-en compte sans "
-            "recommencer les présentations. Pour un commerçant, une invitation à découvrir "
-            "sa boutique convient si elle correspond à sa situation et à son humeur. "
-            "Invente une nouvelle formulation, différente de tes accueils précédents et "
-            "des exemples de ta fiche. Ne réponds pas à nouveau à une ancienne demande. "
-            "N'invente aucun événement, lieu ou lien avec les joueurs. N'aborde aucun "
-            "secret et ne demande aucune révélation. Écris uniquement les paroles du PNJ.")
-    return (
-        "GM NOTE (out-of-character): Dialogue with your character has just opened. "
-        "Speak first with a single short, natural greeting or introduction. Use your "
-        "character sheet, occupation, location and current session context: lore, "
-        "logbook, GM instructions and earlier exchanges with these players. If you "
-        "already know them, acknowledge that instead of introducing yourself again. "
-        "A merchant may invite them to browse the shop when that fits the situation "
-        "and mood. Create fresh wording, different from previous greetings and sheet "
-        "examples. Do not answer an old request again. Invent no events, places or "
-        "relationships. Do not bring up secrets or request disclosure. Output only "
-        "the NPC's spoken words.")
+        cue = (
+            "GM NOTE (out-of-character): Le MJ te demande de prendre la parole maintenant. "
+            + task_fr + " Réponds en une à trois phrases avec ta fiche et le contexte de "
+            "la session. Ta personnalité, ton attitude et ta façon de parler proviennent "
+            "uniquement de ta fiche. Cette action vaut uniquement pour cette réplique. "
+            "Garde tes objectifs, tes obligations et tes limites. N'invente aucun événement "
+            "ni lien avec les joueurs. Ne dévoile aucun secret et ne demande aucune révélation. "
+            "Écris uniquement les paroles du PNJ, sans annoncer l'action ni les consignes.")
+        if context.strip():
+            cue += (
+                "\n\nRéférence de la fiche pour cette action :\n" + context.strip()
+                + "\nSuis son intention, y compris s'il s'agit d'un au revoir. "
+                "Inspire-t'en pour une formulation nouvelle, sans la réciter ni "
+                "en faire un souvenir réel. Les limites et secrets restent applicables.")
+        return cue
+    cue = (
+        "GM NOTE (out-of-character): The GM asks you to speak now. " + task_en
+        + " Reply in one to three sentences using your sheet and session context. "
+        "Your personality, attitude and way of speaking come exclusively from your "
+        "character sheet. This action applies only to this reply. Keep your goals, duties "
+        "and boundaries. Invent no events or relationships with the players. Reveal no "
+        "secrets and do not request disclosure. Output only the NPC's spoken words, "
+        "without announcing the action or instructions.")
+    if context.strip():
+        cue += (
+            "\n\nCharacter sheet reference for this action:\n" + context.strip()
+            + "\nFollow its intent, including a farewell when appropriate. "
+            "Use it to create fresh wording, without reciting it or treating it "
+            "as a real memory. Character boundaries and secret rules still apply.")
+    return cue
 
 
 def _recent_reply_words(messages: list[dict[str, str]], *,

@@ -27,7 +27,7 @@ class DesktopProcess:
         return self.process is not None and self.process.poll() is None
 
     def start(self, campaign: Path, *, prepare: bool = False, microphone: bool = True,
-              test_voice: str | None = None):
+              test_voice: str | None = None, test_text: str | None = None):
         if self.process is not None:
             raise RuntimeError("La session précédente doit être terminée avant de redémarrer.")
         executable = Path(sys.executable)
@@ -41,6 +41,8 @@ class DesktopProcess:
             command.append("--no-microphone")
         if test_voice is not None:
             command.extend(("--test-voice", test_voice))
+        if test_text is not None:
+            command.extend(("--test-text", test_text))
         options = {}
         if sys.platform == "win32":
             options["creationflags"] = subprocess.CREATE_NO_WINDOW

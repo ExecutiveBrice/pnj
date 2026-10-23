@@ -20,11 +20,6 @@ def commands(*items):
     return io.StringIO("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in items))
 
 
-def after_opening(app, items):
-    app._queue.join()
-    yield from items
-
-
 def test_desktop_dialogue_then_summary(config):
     llm = FakeLLM()
     events, messages = [], []
@@ -47,11 +42,11 @@ def test_desktop_recording_does_not_use_evdev(config):
     llm = FakeLLM()
     recorder = FakeRecorder()
     app = NPCApp(config, llm=llm, recorder=recorder, transcriber=FakeTranscriber())
-    run_session(app, after_opening(app, commands(
+    run_session(app, commands(
         {"action": "record"}, {"action": "release"},
         {"action": "shutdown", "summarize": False},
-    )), lambda **msg: None)
-    assert len(llm.calls) == 2
+    ), lambda **msg: None)
+    assert len(llm.calls) == 1
     assert not llm.summarize_calls
 
 
@@ -98,7 +93,7 @@ def test_desktop_honors_exit_commands(config, action):
         {"action": "line", "text": action},
         {"action": "line", "text": "/say This must never be processed"},
     ), lambda **msg: None)
-    assert len(llm.calls) == 2  # opening + Hello; the line after exit stays unprocessed
+    assert len(llm.calls) == 1  # only Hello; the line after exit stays unprocessed
     assert "This must never be processed" not in str(llm.calls)
     assert bool(llm.summarize_calls) == (action == "/end")
 
@@ -106,10 +101,10 @@ def test_desktop_honors_exit_commands(config, action):
 def test_desktop_stdin_eof_releases_microphone(config):
     app = NPCApp(config, llm=FakeLLM(), recorder=FakeRecorder(),
                  transcriber=FakeTranscriber(), speaker=FakeSpeaker())
-    run_session(app, after_opening(app, commands({"action": "record"})), lambda **msg: None)
+    run_session(app, commands({"action": "record"}), lambda **msg: None)
     assert not app._worker.is_alive()
     assert app.speaker.stopped == 1
-    assert len(app.llm.calls) == 2
+    assert len(app.llm.calls) == 1
 
 
 def test_desktop_rejects_bad_commands_and_keeps_session(config):
@@ -121,24 +116,27 @@ def test_desktop_rejects_bad_commands_and_keeps_session(config):
     assert not app._worker.is_alive()
 
 
-def test_desktop_attitude_commands_use_shared_engine_and_report_selected_npc(config, campaign):
+@pytest.mark.parametrize("legacy", [{}, {"attitude": "rude"}, {"attitude": "INJECTED TONE"}])
+def test_desktop_speech_commands_use_sheet_and_report_selected_npc(config, campaign, legacy):
     (campaign / "characters").mkdir()
     (campaign / "characters/smith.md").write_text("# Smith\nA smith.")
     llm = FakeLLM()
-    llm.replies = ["Welcome, traveler.", "Move along, traveler."]
+    llm.reply = "Move along, traveler."
     messages = []
     app = NPCApp(config, llm=llm)
-    assert run_session(app, after_opening(app, commands(
-        {"action": "speak_npc", "npc": "smith", "attitude": "rude"},
-        {"action": "speak_npc", "npc": "smith", "attitude": "invalid"},
+    assert run_session(app, commands(
+        {"action": "speak_npc", "npc": "smith", "speech_action": "greeting", **legacy},
+        {"action": "speak_npc", "npc": "smith", "speech_action": "invalid"},
         {"action": "shutdown", "summarize": False},
-    )), lambda **msg: messages.append(msg)) == 0
+    ), lambda **msg: messages.append(msg)) == 0
     assert messages[0]["npc_id"] == "character"
     assert {n["id"] for n in messages[0]["npcs"]} == {"character", "smith"}
     assert any(m["kind"] == "npcs" and m["npc_id"] == "smith" for m in messages)
     assert any("prise de parole refusée" in m.get("text", "") for m in messages)
-    assert len(llm.calls) == 2
-    assert "curt, gruff and blunt" in str(llm.calls[-1])
+    assert len(llm.calls) == 1
+    from npc.session.prompt import opening_instruction
+
+    assert llm.calls[-1][1][-1]["content"] == opening_instruction("en", action="greeting")
     assert app.active.stem == "smith"
     assert app.active.player_turns == 0
 
@@ -204,11 +202,13 @@ def test_bridge_preserves_unicode_spaces_and_uses_same_python(tmp_path, monkeypa
     monkeypatch.setattr(threading.Thread, "start", lambda self: None)
     bridge = DesktopProcess()
     campaign = tmp_path / "Campagne été et dragons"
-    bridge.start(campaign, microphone=False)
+    bridge.start(campaign, microphone=False, test_voice="marius", test_text="Étrange château !")
     command, options = launched[0]
     assert command[0] == sys.executable
     assert str(campaign.resolve()) in command
     assert "--no-microphone" in command
+    assert command[command.index("--test-voice") + 1] == "marius"
+    assert command[command.index("--test-text") + 1] == "Étrange château !"
     assert "shell" not in options
     bridge.send("line", text="/say Étrange château !")
     assert json.loads(bridge.process.stdin.getvalue())["text"] == "/say Étrange château !"
@@ -267,3 +267,36 @@ def test_bridge_real_worker_reports_bad_config_and_exits(tmp_path):
     assert received[-1]["code"] == 1
     bridge.acknowledge_exit()
     assert bridge.process is None
+
+
+@pytest.mark.parametrize("backend", ["piper", "pocket", "qwen"])
+def test_voice_audition_uses_selected_resource_and_text_without_llm(config, monkeypatch, backend):
+    from npc.desktop_worker import main
+
+    config.tts.backend = backend
+    calls = []
+
+    class Factory:
+        def __init__(self, settings):
+            assert settings is config.tts
+
+        def __call__(self, resource):
+            calls.append(resource)
+            return SimpleNamespace(say=lambda text: calls.append(text),
+                                   stop=lambda: calls.append("stopped"))
+
+    monkeypatch.setattr("npc.desktop_worker.load_config", lambda path: config)
+    monkeypatch.setattr("npc.tts.SpeakerFactory", Factory)
+    monkeypatch.setattr("npc.desktop_worker.build_app", lambda *a, **kw: pytest.fail("dialogue"))
+    text = "Bonjour, étrange voyageur !"
+    assert main([str(config.campaign_dir), "--test-voice", "sample", "--test-text", text]) == 0
+    assert calls == [config.tts.voice_resource_for("sample"), text, "stopped"]
+
+
+@pytest.mark.parametrize("text", ["   ", "x" * 501])
+def test_voice_audition_rejects_invalid_text_before_loading_models(config, monkeypatch, text):
+    from npc.desktop_worker import run_voice_test
+
+    monkeypatch.setattr("npc.tts.SpeakerFactory", lambda *a: pytest.fail("model loaded"))
+    with pytest.raises(ValueError, match="500"):
+        run_voice_test(config, "sample", text, lambda **msg: None)

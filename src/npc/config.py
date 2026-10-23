@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tomllib
@@ -24,6 +25,10 @@ class LlmConfig:
     stream: bool = True  # speak sentence-by-sentence while the reply generates
     api_key: str = ""  # OpenAI-compatible servers only; NPC_LLM_API_KEY env var overrides
     num_ctx: int | None = None  # Ollama context window; raise when attaching lore
+    temperature: float | None = None  # None keeps the server's sampling defaults
+    top_p: float | None = None
+    top_k: int | None = None  # Ollama only; 0 disables this filter
+    repeat_penalty: float | None = None  # Ollama only; 1 disables this penalty
 
 
 @dataclass
@@ -220,6 +225,17 @@ def load_config(campaign_dir: Path) -> Config:
                             or ctx <= 0):
         raise ConfigError(f"{toml_path}: llm.num_ctx must be a positive "
                           f"integer (e.g. num_ctx = 8192), got {ctx!r}")
+    for key, upper in (("temperature", 2), ("top_p", 1), ("repeat_penalty", None)):
+        value = getattr(config.llm, key)
+        if value is not None and (
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value < 0
+                or (upper is not None and value > upper)):
+            bounds = f"from 0 to {upper}" if upper is not None else "greater than or equal to 0"
+            raise ConfigError(f"{toml_path}: llm.{key} must be a finite number {bounds}")
+    top_k = config.llm.top_k
+    if top_k is not None and (isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0):
+        raise ConfigError(f"{toml_path}: llm.top_k must be an integer greater than or equal to 0")
     for key, value in config.tts.voices.items():
         if not isinstance(value, str):
             raise ConfigError(f"{toml_path}: [tts.voices] entries must be "

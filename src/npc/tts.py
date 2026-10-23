@@ -17,6 +17,27 @@ class Speaker(Protocol):
     def say_stream(self, sentences: Iterable[str]) -> tuple[list[str], bool]: ...
 
 
+def available_voices(config) -> tuple[str, ...]:
+    """List audition choices without loading models or downloading voices."""
+    if config.backend == "pocket":
+        from .engines.pocket import POCKET_VOICES
+
+        return POCKET_VOICES
+    if config.backend == "qwen":
+        # VoiceDesign takes descriptions rather than named built-in speakers.
+        return tuple(sorted({config.voice, *config.voices.values()}))
+    folder = Path(config.voices_dir).expanduser()
+    return tuple(sorted(path.stem for path in folder.glob("*.onnx")
+                        if path.is_file() and path.with_suffix(".onnx.json").is_file()))
+
+
+def voice_test_text(config) -> str:
+    french = (config.tts.model.startswith("french") if config.tts.backend == "pocket"
+              else config.language.startswith("fr"))
+    return ("Bonjour, voyageurs. Installez-vous près du feu. Que puis-je faire pour vous ?"
+            if french else "Welcome, travellers. Come and sit by the fire.")
+
+
 class SpeakerFactory:
     """Share one audio device and, for Pocket, one CPU model across characters."""
 

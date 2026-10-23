@@ -6,7 +6,7 @@ import queue
 from pathlib import Path
 
 from .desktop import DesktopProcess
-from .attitudes import SPEECH_ATTITUDES
+from .attitudes import SPEECH_ACTIONS
 from .languages import LANGUAGES
 
 
@@ -25,6 +25,7 @@ class DesktopWindow:
         self.closing = False
         self.preparing = False
         self.testing_voice = False
+        self.test_cancelled = False
         root.title("NPC — Compagnon de jeu")
         root.geometry("1000x800")
         root.minsize(900, 650)
@@ -32,19 +33,19 @@ class DesktopWindow:
         style = ttk.Style(root)
         style.theme_use("clam")
         style.configure(".", background="#f1f4f8", foreground="#1d2b3a")
-        style.configure("Title.TLabel", font=("Helvetica", 24, "bold"))
+        style.configure("Title.TLabel", font=("Helvetica", 20, "bold"))
         style.configure("Subtitle.TLabel", foreground="#566575")
         style.configure("TButton", padding=(12, 7))
         style.configure("TLabelframe.Label", font=("Helvetica", 11, "bold"))
 
-        body = ttk.Frame(root, padding=18)
+        body = ttk.Frame(root, padding=12)
         body.pack(fill="both", expand=True)
         ttk.Label(body, text="Vos personnages prennent la parole", style="Title.TLabel").pack(
             anchor="w")
         ttk.Label(body, text="Une campagne, un personnage, une conversation locale.",
                   style="Subtitle.TLabel").pack(anchor="w", pady=(4, 10))
 
-        campaign_frame = ttk.LabelFrame(body, text="Campagne", padding=12)
+        campaign_frame = ttk.LabelFrame(body, text="Campagne", padding=8)
         campaign_frame.pack(fill="x")
         self.path = tk.StringVar(value=str(Path(campaign).expanduser().resolve()))
         self.path_entry = ttk.Entry(campaign_frame, textvariable=self.path)
@@ -66,12 +67,12 @@ class DesktopWindow:
             languages, textvariable=self.language, state="readonly", width=29)
         self.language_picker.pack(side="left")
         self.language_picker.bind("<<ComboboxSelected>>", self.change_language)
-        ttk.Label(languages, text="Vocabulaire régional ; accent selon la voix.",
+        ttk.Label(languages, text="Accent selon la voix.",
                   style="Subtitle.TLabel", wraplength=170).pack(side="left", padx=(10, 0))
         self.path.trace_add("write", lambda *args: self.refresh_languages())
         self.path_entry.bind("<FocusOut>", lambda event: self.refresh_languages())
 
-        voices = ttk.LabelFrame(body, text="Voix — même personnage sélectionné ci-dessus", padding=10)
+        voices = ttk.LabelFrame(body, text="Voix — même personnage sélectionné ci-dessus", padding=8)
         voices.pack(fill="x", pady=(10, 0))
         self.tts_backend = tk.StringVar()
         self.backend_picker = ttk.Combobox(voices, textvariable=self.tts_backend,
@@ -89,6 +90,45 @@ class DesktopWindow:
         self.voice_test_button = ttk.Button(voices, text="Écouter cette voix", command=self.test_voice)
         self.voice_test_button.pack(side="left")
         self.refresh_languages()
+
+        main_body = body
+        self.notebook = ttk.Notebook(main_body)
+        self.notebook.pack(fill="x", pady=(10, 0))
+        body = ttk.Frame(self.notebook, padding=4)
+        self.test_tab = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(body, text="Conversation")
+        self.notebook.add(self.test_tab, text="test")
+        test_heading = ttk.Frame(self.test_tab)
+        test_heading.pack(fill="x")
+        ttk.Label(test_heading, text="Tester les voix du générateur sélectionné",
+                  font=("Helvetica", 12, "bold")).pack(side="left")
+        ttk.Label(test_heading, textvariable=self.tts_backend).pack(side="right")
+        self.test_help = tk.StringVar()
+        ttk.Label(self.test_tab, textvariable=self.test_help, wraplength=820,
+                  style="Subtitle.TLabel").pack(anchor="w", pady=4)
+        choices = ttk.Frame(self.test_tab)
+        choices.pack(fill="x")
+        ttk.Label(choices, text="Voix à tester").pack(side="left", padx=(0, 8))
+        self.test_voice_choice = tk.StringVar()
+        self.test_voice_picker = ttk.Combobox(choices, textvariable=self.test_voice_choice,
+                                              state="readonly")
+        self.test_voice_picker.pack(side="left", fill="x", expand=True)
+        self.test_refresh_button = ttk.Button(choices, text="Actualiser",
+                                               command=self.refresh_test_voices)
+        self.test_refresh_button.pack(side="left", padx=(8, 0))
+        ttk.Label(self.test_tab, text="Texte à prononcer (500 caractères maximum)").pack(
+            anchor="w", pady=(4, 2))
+        self.test_text = tk.Text(self.test_tab, height=2, wrap="word", font=("Helvetica", 11))
+        self.test_text.pack(fill="x")
+        test_actions = ttk.Frame(self.test_tab)
+        test_actions.pack(fill="x", pady=(4, 0))
+        self.test_listen_button = ttk.Button(test_actions, text="Écouter",
+                                              command=self.audition_voice)
+        self.test_listen_button.pack(side="left")
+        self.test_stop_button = ttk.Button(test_actions, text="Arrêter le test",
+                                            command=self.stop_voice_test)
+        self.test_stop_button.pack(side="left", padx=8)
+        self.refresh_test_voices()
 
         actions = ttk.Frame(body)
         actions.pack(fill="x", pady=8)
@@ -111,15 +151,15 @@ class DesktopWindow:
         self.mic_option.pack(side="right")
 
         self.status = tk.StringVar(value="Prêt à démarrer")
-        ttk.Label(body, textvariable=self.status, style="Subtitle.TLabel").pack(anchor="w")
-        self.log = ScrolledText(body, wrap="word", height=3, state="disabled",
+        ttk.Label(main_body, textvariable=self.status, style="Subtitle.TLabel").pack(anchor="w")
+        self.log = ScrolledText(main_body, wrap="word", height=3, state="disabled",
                                 font=("Helvetica", 12),
                                 background="#f7f9fc", foreground="#1d2b3a",
                                 relief="flat", padx=14, pady=12)
         self.log.pack(fill="both", expand=True, pady=(6, 8))
 
         composer = ttk.LabelFrame(body, text="Conversation", padding=12)
-        composer.pack(side="bottom", fill="x", before=self.log)
+        composer.pack(side="bottom", fill="x")
         self.mode = tk.StringVar(value="Parole du joueur")
         self.mode_picker = ttk.Combobox(composer, textvariable=self.mode, state="readonly",
                                         values=("Parole du joueur", "Note du MJ", "Commande"),
@@ -144,7 +184,7 @@ class DesktopWindow:
                                 command=lambda line=command: self.send_line(line))
             button.pack(side="left", padx=(0, 4))
             self.shortcuts.append(button)
-        speech = ttk.LabelFrame(composer, text="Faire parler un PNJ — pour cette réplique", padding=8)
+        speech = ttk.LabelFrame(composer, text="Faire parler un PNJ", padding=8)
         speech.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(10, 0))
         self.speech_targets = {}
         self.speech_target = tk.StringVar()
@@ -153,9 +193,9 @@ class DesktopWindow:
         self.speech_picker.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         speech.columnconfigure(0, weight=1)
         self.speech_buttons = []
-        for column, (attitude, label) in enumerate(SPEECH_ATTITUDES.items(), start=1):
+        for column, (action, label) in enumerate(SPEECH_ACTIONS.items(), start=1):
             button = ttk.Button(speech, text=label,
-                                command=lambda tone=attitude: self.speak_npc(tone))
+                                command=lambda cue=action: self.speak_npc(cue))
             button.grid(row=0, column=column, sticky="ew", padx=(0, 4))
             self.speech_buttons.append(button)
         ttk.Label(body, text="Ollama doit être installé et lancé. Choisissez la langue avant la session. "
@@ -165,7 +205,14 @@ class DesktopWindow:
         self.append("Choisissez une campagne ou créez-en une, puis préparez les modèles "
                     "avant la première session. Les téléchargements peuvent prendre plusieurs minutes.")
         self.update_controls()
+        self.notebook.bind("<<NotebookTabChanged>>", self.fit_tab)
+        self.fit_tab()
         root.after(80, self.poll)
+
+    def fit_tab(self, event=None):
+        self.root.update_idletasks()
+        page = self.notebook.nametowidget(self.notebook.select())
+        self.notebook.configure(height=page.winfo_reqheight())
 
     def append(self, text):
         self.log.configure(state="normal")
@@ -189,6 +236,13 @@ class DesktopWindow:
                                     "readonly" if self.tts_backend.get() == "Pocket TTS" else "normal")
         for widget in (self.voice_save_button, self.voice_test_button):
             widget.configure(state="disabled" if busy else "normal")
+        self.test_voice_picker.configure(state="disabled" if busy else "readonly")
+        self.test_refresh_button.configure(state="disabled" if busy else "normal")
+        self.test_text.configure(state="disabled" if busy else "normal")
+        can_test = not busy and bool(self.test_voice_picker["values"])
+        self.test_listen_button.configure(state="normal" if can_test else "disabled")
+        self.test_stop_button.configure(state="normal" if busy and self.testing_voice
+                                        else "disabled")
         self.stop_button.configure(state="normal" if live else "disabled")
         self.force_button.configure(state="normal" if busy and
                                     (self.stopping or self.preparing or not self.ready)
@@ -212,10 +266,10 @@ class DesktopWindow:
                          if npc_id == message.get("npc_id")), "")
         self.speech_target.set(selected)
 
-    def speak_npc(self, attitude):
+    def speak_npc(self, action):
         npc_id = self.speech_targets.get(self.speech_target.get())
         if self.ready and not self.stopping and not self.recording and npc_id:
-            self.send("speak_npc", npc=npc_id, attitude=attitude)
+            self.send("speak_npc", npc=npc_id, speech_action=action)
 
     def refresh_languages(self):
         from .roster import discover_character_files, read_display_name
@@ -271,6 +325,73 @@ class DesktopWindow:
                            else config.tts.voice)
         except (ConfigError, OSError):
             self.voice.set("")
+        if hasattr(self, "test_voice_picker"):
+            self.refresh_test_voices()
+
+    def refresh_test_voices(self):
+        from .config import ConfigError, load_config
+        from .tts import available_voices, voice_test_text
+
+        if self.engine.process is not None:
+            return
+        values = ()
+        try:
+            config = load_config(Path(self.path.get()))
+            values = available_voices(config.tts)
+            if not self.test_text.get("1.0", "end-1c").strip():
+                self.test_text.insert("1.0", voice_test_text(config))
+            if config.tts.backend == "qwen":
+                help_text = ("VoiceDesign utilise les descriptions vocales de la campagne, "
+                             "sans catalogue de voix prédéfinies.")
+            elif config.tts.backend == "piper":
+                help_text = ("Voix Piper installées (modèle ONNX et fichier JSON)." if values else
+                             "Aucune voix Piper installée. Préparez les modèles, puis actualisez.")
+            else:
+                help_text = ("Voix Pocket TTS proposées par le moteur. Le premier usage peut "
+                             "nécessiter le téléchargement du modèle.")
+            self.test_help.set(help_text + " Les essais ne modifient pas les voix enregistrées.")
+            if self.test_voice_choice.get() not in values:
+                self.test_voice_choice.set(config.tts.voice if config.tts.voice in values else
+                                           values[0] if values else "")
+        except (ConfigError, OSError) as exc:
+            self.test_help.set(f"Impossible de lister les voix : {exc}")
+            self.test_voice_choice.set("")
+        self.test_voice_picker.configure(values=values)
+        if hasattr(self, "start_button"):
+            self.fit_tab()
+            self.update_controls()
+
+    def audition_voice(self):
+        from tkinter import messagebox
+
+        from .config import load_config
+        from .tts import available_voices
+
+        if self.engine.process is not None:
+            return
+        try:
+            path = Path(self.path.get()).expanduser()
+            config = load_config(path)
+            voice = self.test_voice_choice.get()
+            if voice not in available_voices(config.tts):
+                raise ValueError("Choisissez une voix disponible, ou actualisez la liste.")
+            text = self.test_text.get("1.0", "end-1c").strip()
+            if not text or len(text) > 500:
+                raise ValueError("Le texte de test doit contenir entre 1 et 500 caractères.")
+            self.engine.start(path, microphone=False, test_voice=voice, test_text=text)
+            self.testing_voice = True
+            self.test_cancelled = False
+            self.status.set("Préparation et écoute de la voix…")
+            self.append(f"Test de voix : {voice}. Le premier chargement peut prendre du temps.")
+            self.update_controls()
+        except Exception as exc:
+            messagebox.showerror("Écoute impossible", str(exc), parent=self.root)
+
+    def stop_voice_test(self):
+        if self.testing_voice and self.engine.process is not None:
+            self.test_cancelled = True
+            self.engine.terminate()
+            self.status.set("Arrêt du test vocal…")
 
     def change_backend(self, event=None):
         from tkinter import messagebox
@@ -322,6 +443,7 @@ class DesktopWindow:
             voice = config.tts.voices.get(stem, config.tts.voice)
             self.engine.start(path, microphone=False, test_voice=voice)
             self.testing_voice = True
+            self.test_cancelled = False
             self.status.set("Préparation et écoute de la voix…")
             self.append("Écoute sans LLM ni micro. Le premier chargement peut prendre du temps.")
             self.update_controls()
@@ -500,12 +622,15 @@ class DesktopWindow:
                 self.engine.acknowledge_exit()
                 self.ready = self.microphone = self.recording = self.stopping = False
                 self.set_speech_npcs({})
-                self.status.set("Écoute terminée" if self.testing_voice and message["code"] == 0
+                self.status.set("Test vocal arrêté" if self.test_cancelled
+                                else "Écoute terminée" if self.testing_voice and message["code"] == 0
                                 else "Préparation terminée" if self.preparing and message["code"] == 0
                                 else "Session terminée" if message["code"] == 0
                                 else "Arrêt du moteur — consultez les messages ci-dessus")
                 self.preparing = False
                 self.testing_voice = False
+                self.test_cancelled = False
+                self.refresh_test_voices()
                 if self.closing:
                     self.root.destroy()
                     return

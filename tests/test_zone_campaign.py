@@ -66,7 +66,7 @@ def test_shared_and_private_lore_reload_without_replacing_memory(zones):
 
 def test_zone_runtime_switch_reload_and_logbooks_are_isolated(zones):
     app = NPCApp(Config(campaign_dir=zones), llm=FakeLLM(), on_event=lambda _: None)
-    app.start(greet=False)
+    app.start()
     try:
         app.handle_line("/npc alice")
         app.handle_line("/say This is our village promise")
@@ -109,6 +109,22 @@ def test_zone_voice_and_language_settings_round_trip(zones):
     assert slot.voice == "jean"
     assert config.language_for("village/garde") == "fr-BE"
     assert config.language_for("foret/garde") == "en"
+
+
+def test_named_npc_files_and_section_secrets_reach_app(tmp_path):
+    write(tmp_path / "zones/village/characters/barnabe.md",
+          "# Barnabé Potiron\n**Identifiant :** VILLAGE-02.\n"
+          "- Introduction : Our village supports its hens.\n"
+          "## Secrets\n- He bought sawdust; admits it when shown the sacks.\n")
+    config = Config(campaign_dir=tmp_path)
+    config.tts.voices["village/barnabe"] = "jean"
+    app = NPCApp(config, llm=FakeLLM(), on_event=lambda _: None)
+    assert list(app.roster) == ["village/barnabe"]
+    assert app.active.voice == "jean"
+    assert app.player_status()["npcs"] == [{"id": "village/barnabe", "name": "Barnabé Potiron"}]
+    assert app.gm_npc_details()[0]["secret_count"] == 1
+    assert app.gm_npc_secrets("village/barnabe")["secrets"] == [{
+        "body": "He bought sawdust; admits it when shown the sacks.", "status": "local", "hint": ""}]
 
 
 @pytest.mark.parametrize("runtime", [True, False], ids=["runtime", "doctor"])

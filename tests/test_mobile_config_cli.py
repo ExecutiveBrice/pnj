@@ -107,7 +107,8 @@ def test_client_only_audio_routes_default_and_switched_voices(campaign, monkeypa
     monkeypatch.setattr("npc.mobile_server.MobileServer", TestServer)
 
     def repl(app, config, **kwargs):
-        app._queue.join()  # the opening uses the configured audio routing too
+        app._queue.join()
+        assert not app.llm.calls
         app.speaker.say("Hello")
         switched = app._make_speaker(config.tts.voice_path_for("other-voice"))
         switched.say("World")
@@ -116,9 +117,9 @@ def test_client_only_audio_routes_default_and_switched_voices(campaign, monkeypa
     monkeypatch.setattr(cli, "_run_repl", repl)
     assert cli.main(["run", str(campaign)]) == 0
     assert len(speakers) == 2
-    assert speakers[0]._player.played == ([] if mode == "enabled" else [20, 5])
+    assert speakers[0]._player.played == ([] if mode == "enabled" else [5])
     assert speakers[1]._player.played == ([] if mode == "enabled" else [5])
-    assert published == ([(20, 22050), (5, 22050), (5, 22050)] if mode == "enabled" else [])
+    assert published == ([(5, 22050), (5, 22050)] if mode == "enabled" else [])
 
 
 @pytest.mark.parametrize("mode", ["default", "flag", "config", "failure", "repl_failure"])

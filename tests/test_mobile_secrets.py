@@ -28,7 +28,7 @@ def server(config, campaign):
             server.publish(event)
 
     app = NPCApp(config, llm=FakeLLM(), speaker=FakeSpeaker(), on_event=on_event)
-    app.start(greet=False)
+    app.start()
     server = MobileServer(app, port=0)
     server.start()
     yield server
@@ -372,27 +372,26 @@ def test_secret_inspection_uses_exact_validated_npc_ids(server, npc):
         assert until(ws, "gm_npc_secrets")["name"] == "Smith"
 
 
-@pytest.mark.parametrize("attitude,expected", [
-    ("agacement", "Annoyance"), ("amusant", "Amusing"),
-    ("rude", "Rude"), ("complaisant", "Accommodating"),
-])
-def test_mobile_gm_buttons_target_npc_and_generate_one_styled_reply(server, attitude, expected):
+def test_mobile_gm_buttons_target_npc_without_a_reply_tone(server):
     with client(server) as ws:
         cards = until(ws, "gm_npc_list")
-        assert [a["id"] for a in cards["speech_attitudes"]] == [
-            "agacement", "amusant", "rude", "complaisant"]
-        send(ws, type="speak_npc", npc="smith", attitude=attitude)
+        assert "speech_attitudes" not in cards
+        assert cards["speech_actions"] == [
+            {"id": "presentation", "label": "Présentation"},
+            {"id": "fill_wait", "label": "Meubler pour attendre"},
+            {"id": "greeting", "label": "Salutation"},
+        ]
+        send(ws, type="speak_npc", npc="smith")
         reply = until(ws, "npc_replied")
         until(ws, "state")  # idle after playback
         assert reply["npc"] == "Smith"
         assert len(server.app.llm.calls) == 1
-        assert expected + ":" in server.app.llm.calls[0][1][-1]["content"]
         assert "The smith hid it in his forge." not in prompts(server.app)
         assert not server.app.active.secrets.revealed()
         assert server.app.active.player_turns == 0
 
 
-def test_player_connections_cannot_issue_attitude_cues(server):
+def test_player_connections_cannot_issue_speech_cues(server):
     server._authorize_gm = lambda req: False
     with client(server) as ws:
         send(ws, type="speak_npc", npc="smith", attitude="complaisant")
@@ -402,8 +401,10 @@ def test_player_connections_cannot_issue_attitude_cues(server):
 
 
 @pytest.mark.parametrize("values", [
-    {}, {"npc": "smith", "attitude": []}, {"npc": "smith", "attitude": "invalid"},
+    {},
     {"npc": "../secrets", "attitude": "rude"}, {"npc": [], "attitude": "rude"},
+    *({"npc": "smith", "attitude": "joyeux", "action": action}
+      for action in ([], {}, "", "unknown", "constructor")),
 ])
 def test_bad_mobile_speech_cue_does_not_switch_and_connection_survives(server, values):
     with client(server) as ws:
@@ -412,3 +413,84 @@ def test_bad_mobile_speech_cue_does_not_switch_and_connection_survives(server, v
         assert server.app.active.stem == "character"
         send(ws, type="speak_npc", npc="smith", attitude="amusant")
         assert until(ws, "npc_replied")["npc"] == "Smith"
+
+
+
+@pytest.mark.parametrize("language", ["en", "fr-CA"])
+@pytest.mark.parametrize("action,en_action,fr_action", [
+    ("presentation", "Introduction:", "Présentation :"),
+    ("fill_wait", "Fill the wait:", "Meubler pour attendre :"),
+    ("greeting", "Greeting:", "Salutation :"),
+])
+@pytest.mark.parametrize("legacy", [
+    {}, *({"attitude": value} for value in (
+        "humoriste", "hargneux", "presse", "joyeux",
+        "agacement", "amusant", "rude", "complaisant",
+        "INJECTED TONE", [],
+    )),
+])
+def test_mobile_speech_actions_reach_the_voice_pipeline(
+        server, language, action, en_action, fr_action, legacy):
+    server.app.config.language = language
+    server.app.llm.reply = ("Bienvenue dans ma forge." if language.startswith("fr")
+                            else "Welcome to my forge.")
+    with client(server) as ws:
+        send(ws, type="speak_npc", npc="smith", action=action, **legacy)
+        reply = until(ws, "npc_replied")
+        drain(server.app)
+        assert reply["npc"] == "Smith"
+        assert len(server.app.llm.calls) == 1
+        cue = server.app.llm.calls[0][1][-1]["content"]
+        assert (fr_action if language.startswith("fr") else en_action) in cue
+        from npc.session.prompt import opening_instruction
+
+        assert cue == opening_instruction(language, action=action)
+        assert server.app.speaker.spoken == [reply["text"]]
+        assert "The smith hid it in his forge." not in prompts(server.app)
+        assert not server.app.active.secrets.revealed()
+        assert server.app.active.player_turns == 0
+        assert cue not in str(server.app.history.as_messages())
+        assert not server.app.active.ooc_notes
+
+
+@pytest.mark.parametrize("format", ["bullet", "section"])
+@pytest.mark.parametrize("language", ["en", "fr"])
+@pytest.mark.parametrize("action,reference", [
+    ("presentation", "INTRODUCTION REFERENCE"),
+    ("fill_wait", "WAIT REFERENCE"),
+    ("greeting", "FAREWELL REFERENCE"),
+])
+def test_mobile_action_uses_only_its_sheet_reference(server, format, language, action, reference):
+    server.app.config.language = language
+    server.app.llm.reply = "Bienvenue dans ma forge." if language == "fr" else "Welcome to my forge."
+    slot = server.app.roster["smith"]
+    entries = {"Introduction": "INTRODUCTION REFERENCE", "Meuble": "WAIT REFERENCE",
+               "Salutation": "FAREWELL REFERENCE"}
+    speech = "".join(f"- {label} : {value}\n" if format == "bullet"
+                     else f"## {label}\n{value}\n" for label, value in entries.items())
+    slot.path.write_text("# Smith\nA smith.\n" + speech + "## Secrets\n- A local confidence.\n",
+                         encoding="utf-8")
+    server.app.handle_line("/reload")
+    drain(server.app)
+    assert next(card for card in server.app.gm_npc_details()
+                if card["id"] == "smith")["secret_count"] == 2
+    with client(server) as ws:
+        send(ws, type="speak_npc", npc="smith", action=action)
+        until(ws, "npc_replied")
+        drain(server.app)
+        system, messages = server.app.llm.calls[-1]
+        cue = messages[-1]["content"]
+        assert reference in cue
+        for other in entries.values():
+            assert other not in system
+            assert (other in cue) == (other == reference)
+        assert "The smith hid it in his forge." not in system + cue
+        assert "REFERENCE" not in str(slot.history.as_messages())
+        assert not slot.ooc_notes
+        server.app.llm.reply = ("Les affaires vont bien aujourd'hui." if language == "fr"
+                                else "Business is good today.")
+        send(ws, type="say", text="How is business?")
+        until(ws, "npc_replied")
+        drain(server.app)
+        system, messages = server.app.llm.calls[-1]
+        assert "REFERENCE" not in system + str(messages)

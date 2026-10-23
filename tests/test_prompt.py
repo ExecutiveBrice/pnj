@@ -7,6 +7,7 @@ from npc.session.prompt import (
     looks_foreign,
     reply_may_repeat,
     reply_repeats,
+    split_character_speech,
 )
 from npc.session.secrets import Secret, SecretsSheet
 
@@ -66,6 +67,37 @@ def test_empty_sections_are_omitted():
     assert "Adventure notes" not in prompt
     assert "Logbook" not in prompt
     assert "Standing GM instructions" not in prompt
+
+
+@pytest.mark.parametrize("format", ["bullet", "section"])
+def test_speech_references_are_separate_from_standing_context(format):
+    references = {"Introduction": "Introduce the grain shop.",
+                  "Meuble": "Complain about the weather.",
+                  "Salutation": "Wish the visitors a good journey."}
+    if format == "bullet":
+        speech = "".join(f"- {label} : {text}\n" for label, text in references.items())
+    else:
+        speech = "".join(f"## {label}\n\n{text}\n\n" for label, text in references.items())
+    sheet = "# Merchant\n- Motivation : Sell grain.\n" + speech + (
+        "## Secrets\n- Introduction : A private confidence with its condition.\n"
+        "## Rules\nDo not leave the shop.\n")
+    body, contexts = split_character_speech(sheet)
+    assert contexts == dict(zip(("presentation", "fill_wait", "greeting"), references.values()))
+    system = build_system_prompt(sheet, "", "", [])
+    for reference in references.values():
+        assert reference not in body and reference not in system
+    assert "Sell grain" in system and "Do not leave the shop" in system
+    assert "Introduction : A private confidence with its condition." in system
+
+
+def test_speech_references_keep_multiline_and_nested_section_content():
+    body, contexts = split_character_speech(
+        "# Merchant\n- Introduction : Introduce the shop.\n  Mention the grain.\n\n"
+        "## Meuble\nA weather complaint.\n### Delivery\nKeep it brief.\n"
+        "## Secrets\n- A confidence.\n")
+    assert contexts["presentation"] == "Introduce the shop.\nMention the grain."
+    assert "### Delivery\nKeep it brief." in contexts["fill_wait"]
+    assert "## Secrets\n- A confidence." in body
 
 
 def test_reply_language_is_english_even_for_swedish_input():

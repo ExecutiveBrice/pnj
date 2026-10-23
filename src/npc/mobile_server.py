@@ -24,10 +24,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from .audio.recorder import AudioClip
-from .attitudes import SPEECH_ATTITUDES
+from .attitudes import SPEECH_ACTIONS
 from .events import ConfigReloaded, Event, NpcSwitched, SecretDisclosuresChanged, SecretResolved
 from .mobile_protocol import PROTOCOL_VERSION, encode, event_to_message, gm_event_to_message
 from .voice_studio import StudioCancelled, VoiceStudio
+from .websocket_logging import logger as websocket_logger
 
 if TYPE_CHECKING:
     from .app import NPCApp
@@ -71,12 +72,17 @@ class MobileServer:
         self._scheduled = False
         self._overflow = False
         self._clients: dict = {}
+        self._uploads: dict = {}
+        self._resetting = False
+        self._reset_task = None
         if studio is None:
             from .llm import make_llm_client
 
             studio = VoiceStudio(app.config, llm_factory=lambda: make_llm_client(app.config.llm))
         self.studio = studio
         self._studio_job = None
+        self._studio_done = threading.Event()
+        self._studio_done.set()
 
     def start(self) -> None:
         if self._thread is not None:
@@ -107,6 +113,8 @@ class MobileServer:
             self._thread.join(timeout=5)
 
     def publish(self, event: Event) -> None:
+        if self._resetting:
+            return
         if self.app.config.mobile.secret_approval:
             if type(event) in (ConfigReloaded, NpcSwitched, SecretDisclosuresChanged,
                               SecretResolved):
@@ -126,7 +134,7 @@ class MobileServer:
         Copy before crossing threads. All frames for a segment are one outbox
         item, so another event/audio segment cannot interleave inside it.
         """
-        if not len(samples):
+        if self._resetting or not len(samples):
             return
         pcm = np.asarray(samples, dtype="<i2").reshape(-1).tobytes()
         start = encode({"type": "audio_start", "npc": self.app.npc_name,
@@ -199,6 +207,7 @@ class MobileServer:
         self._stop_future = self._loop.create_future()
         async with serve(self._handler, self.listen, self.port,
                          process_request=self._process_request,
+                         logger=websocket_logger,
                          max_size=65536, max_queue=16, close_timeout=1) as server:
             self.port = server.sockets[0].getsockname()[1]
             self._ready.set()
@@ -274,6 +283,9 @@ class MobileServer:
     async def _handler(self, connection) -> None:
         from websockets.exceptions import ConnectionClosed
 
+        if self._resetting:
+            await connection.close(code=1013, reason="Session reset in progress")
+            return
         outbox = asyncio.Queue(maxsize=64)
         gm = (self.app.config.mobile.secret_approval
               and (self._authorize_gm is None or self._authorize_gm(connection.request)))
@@ -298,6 +310,7 @@ class MobileServer:
 
         async def receive():
             upload = _AudioUpload()
+            self._uploads[connection] = upload
             async for raw in connection:
                 response = await self._command(raw, upload, gm=gm,
                                                connection=connection, outbox=outbox)
@@ -322,6 +335,7 @@ class MobileServer:
             if self._studio_job is not None and self._studio_job[0] is connection:
                 self._studio_job[1].set()
             self._clients.pop(connection, None)
+            self._uploads.pop(connection, None)
             self._gm_clients.discard(connection)
             sender.cancel()
             receiver.cancel()
@@ -332,8 +346,8 @@ class MobileServer:
 
     def _npc_details_snapshot(self) -> dict:
         return {"type": "gm_npc_list", "npcs": self.app.gm_npc_details(),
-                "speech_attitudes": [{"id": key, "label": label}
-                                     for key, label in SPEECH_ATTITUDES.items()]}
+                "speech_actions": [{"id": key, "label": label}
+                                   for key, label in SPEECH_ACTIONS.items()]}
 
     def _start_studio(self, connection, outbox, message):
         if self._studio_job is not None:
@@ -345,11 +359,12 @@ class MobileServer:
         cancel = threading.Event()
         job = (connection, cancel)
         self._studio_job = job
+        done = self._studio_done = threading.Event()
         loop = self._loop
 
         def reply(message):
             def deliver():
-                if connection in self._clients:
+                if connection in self._clients and self._studio_job is job:
                     self._enqueue(connection, outbox, (encode(message),))
             if not loop.is_closed():
                 try:
@@ -376,6 +391,7 @@ class MobileServer:
                        "Échec de génération. Vérifiez Qwen3-TTS (uv sync --extra qwen), "
                        "les modèles et le serveur LLM sur le PC."})
             finally:
+                done.set()
                 if not loop.is_closed():
                     try:
                         loop.call_soon_threadsafe(completed)
@@ -387,10 +403,52 @@ class MobileServer:
         threading.Thread(target=worker, name="voice-studio", daemon=True).start()
         return None
 
+    def _discard_pending_output(self) -> None:
+        with self._publish_lock:
+            while not self._outbox.empty():
+                self._outbox.get_nowait()
+            self._overflow = False
+        for outbox in self._clients.values():
+            while not outbox.empty():
+                outbox.get_nowait()
+
+    async def _reset_session(self) -> dict:
+        self._resetting = True
+        try:
+            for upload in self._uploads.values():
+                upload.data = None
+            self._discard_pending_output()
+            studio_done = self._studio_done
+            if self._studio_job is not None:
+                self._studio_job[1].set()
+                # Ignore queued progress/results belonging to the abandoned job.
+                self._studio_job = None
+            # Both pipelines must settle before acknowledging successful cleanup.
+            reset, _ = await asyncio.gather(
+                asyncio.to_thread(self.app.reset_session),
+                asyncio.to_thread(studio_done.wait),
+                return_exceptions=True,
+            )
+            if isinstance(reset, BaseException) or not reset:
+                return {"type": "error", "message": "Session reset failed"}
+            self._discard_pending_output()
+            for connection, outbox in list(self._clients.items()):
+                frames = (encode({"type": "state", "state": "idle"}),)
+                if connection in self._gm_clients:
+                    frames += (encode(self._disclosure_snapshot()),
+                               encode(self._npc_details_snapshot()))
+                self._enqueue(connection, outbox, frames)
+            return {"type": "session_reset"}
+        finally:
+            self._resetting = False
+
     async def _command(self, raw, upload: _AudioUpload, *, gm: bool = False,
                        connection=None, outbox=None) -> dict | None:
         def error(message):
             return {"type": "error", "message": message}
+        if self._resetting:
+            upload.data = None
+            return error("Session reset in progress")
         if not isinstance(raw, str):
             if upload.data is None:
                 return error("Send audio_input_start before audio data")
@@ -407,6 +465,15 @@ class MobileServer:
             return error("Expected a JSON object")
         kind = message.get("type")
         try:
+            if kind == "reset_session":
+                if not gm:
+                    return error("Session reset is unavailable for this connection")
+                upload.data = None
+                self._resetting = True
+                # Disconnecting the requester must not release the reset gate
+                # while the engine or studio is still settling.
+                self._reset_task = asyncio.create_task(self._reset_session())
+                return await asyncio.shield(self._reset_task)
             if kind == "audio_input_start":
                 if upload.data is not None:
                     upload.data = None
@@ -459,7 +526,8 @@ class MobileServer:
                 if not gm:
                     return error("NPC speech cues are unavailable for this connection")
                 if not await asyncio.to_thread(self.app.speak_npc,
-                                               message.get("npc"), message.get("attitude")):
+                                               message.get("npc"),
+                                               action=message.get("action")):
                     return error("NPC speech cue rejected")
                 return None
             if kind == "resolve_secret_disclosure":

@@ -302,6 +302,52 @@ def test_make_llm_client_passes_num_ctx():
     assert isinstance(client, OpenAICompatClient)
 
 
+@pytest.mark.parametrize("backend", ["ollama", "openai"])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("temperature", [0, 0.2])
+def test_sampling_settings_reach_the_server_in_both_modes(backend, streaming, temperature):
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        if backend == "ollama":
+            body = {"message": {"role": "assistant", "content": "Hello."}, "done": True}
+            if streaming:
+                return httpx.Response(200, content=(json.dumps(body) + "\n").encode())
+            return httpx.Response(200, json=body)
+        return sse("Hello.") if streaming else reply_ok("Hello.")
+
+    kwargs = {"temperature": temperature, "top_p": 0.9,
+              "transport": httpx.MockTransport(handler)}
+    if backend == "ollama":
+        client = OllamaClient("http://localhost:11434", "m", num_ctx=8192,
+                              top_k=0, repeat_penalty=1.05, **kwargs)
+    else:
+        client = OpenAICompatClient("http://localhost:1337", "m", **kwargs)
+    if streaming:
+        assert "".join(client.chat_stream("SYSTEM", [])) == "Hello."
+    else:
+        assert client.chat("SYSTEM", []) == "Hello."
+    options = seen[0]["options"] if backend == "ollama" else seen[0]
+    assert options["temperature"] == temperature
+    assert options["top_p"] == 0.9
+    if backend == "ollama":
+        assert options["num_ctx"] == 8192
+        assert options["top_k"] == 0
+        assert options["repeat_penalty"] == 1.05
+    else:
+        assert "top_k" not in options and "repeat_penalty" not in options
+
+
+@pytest.mark.parametrize("backend", ["ollama", "openai"])
+def test_factory_passes_sampling_config(backend):
+    client = make_llm_client(LlmConfig(backend=backend, temperature=0.2, top_p=0.9,
+                                       top_k=40, repeat_penalty=1.05))
+    assert (client.temperature, client.top_p) == (0.2, 0.9)
+    if backend == "ollama":
+        assert (client.top_k, client.repeat_penalty) == (40, 1.05)
+
+
 @pytest.mark.parametrize("classification, expected", [
     ("teleporter-key", "teleporter-key"), ("NONE", None),
     ("made-up-topic", None), ("teleporter-key because you are friends", None),
@@ -339,12 +385,12 @@ def test_ollama_secret_routing_is_deterministic_without_changing_dialogue_sampli
         return httpx.Response(200, json={"message": {"role": "assistant", "content": "NONE"},
                                         "done": True})
 
-    client = OllamaClient("http://localhost:11434", "m", num_ctx=8192,
+    client = OllamaClient("http://localhost:11434", "m", num_ctx=8192, temperature=0.2,
                           transport=httpx.MockTransport(handler))
     assert client.select_secret_topic("Where is the key?", {"key": "where a key is hidden"}, []) is None
     client.chat("SYSTEM", [])
     assert requests[0]["options"] == {"num_ctx": 8192, "temperature": 0.0}
-    assert requests[1]["options"] == {"num_ctx": 8192}
+    assert requests[1]["options"] == {"num_ctx": 8192, "temperature": 0.2}
 
 
 @pytest.mark.parametrize("line", [

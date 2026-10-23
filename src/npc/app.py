@@ -12,6 +12,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from concurrent.futures import Future
 from datetime import date
 
 from .audio.recorder import AudioClip
@@ -52,7 +53,7 @@ from .events import (
 )
 from .llm import LlmError, StreamingNotSupported
 from .roster import CharacterSlot, discover_character_files, load_slot, render_turns
-from .attitudes import SPEECH_ATTITUDES
+from .attitudes import SPEECH_ACTIONS
 from .session.logbook import Transcript
 from .session.lore import estimate_tokens, suggest_num_ctx
 from .session.prompt import (
@@ -63,8 +64,10 @@ from .session.prompt import (
     opening_instruction,
     reply_may_repeat,
     reply_repeats,
+    split_character_speech,
     strip_decoration,
 )
+from .session.reset import clear_session_directories
 from .session.secrets import (
     FALLBACK_STALL,
     MarkerScrubber,
@@ -86,6 +89,10 @@ class _WrongLanguage(Exception):
 
 class _RepeatedReply(Exception):
     """A copied reply was buffered before audio; regenerate it once."""
+
+
+class _SessionReset(Exception):
+    """Abandon an old turn before it can publish or persist more output."""
 
 HELP = """\
 Talking
@@ -138,6 +145,7 @@ class NPCApp:
         self._disclosure_decisions: dict[str, str] = {}
         self._worker: threading.Thread | None = None
         self._accepting = True
+        self._resetting = threading.Event()
         self._player_turns = 0  # campaign-global; drives checkpoint cadence
         self._silence_hinted = False
         self._ctx_warned = False
@@ -261,11 +269,8 @@ class NPCApp:
         self.config = new
         self._emit(ConfigReloaded(applied=tuple(applied), restart_needed=restart_needed))
 
-    def start(self, *, greet: bool = True) -> None:
-        """Start the worker, normally opening with the active NPC's greeting."""
-        if greet:
-            self._set_state_if({State.IDLE}, State.PROCESSING)
-            self._queue.put(("opening", None))
+    def start(self) -> None:
+        """Start the worker and wait for an explicit dialogue action."""
         self._worker = threading.Thread(target=self._worker_loop, daemon=True,
                                         name="npc-worker")
         self._worker.start()
@@ -319,6 +324,8 @@ class NPCApp:
             self._emit(VoiceUnavailable())
             return
         with self._lock:
+            if not self._accepting or self._resetting.is_set():
+                return
             prior = self._state
             if prior not in (State.RECORDING, State.PROCESSING):
                 self._state = State.RECORDING
@@ -361,7 +368,9 @@ class NPCApp:
             self._set_state_if({State.PROCESSING}, State.IDLE)
             self._emit(RecordingDiscarded("too short"))
             return
-        self._queue.put(("utterance", clip))
+        with self._lock:
+            if self._accepting and not self._resetting.is_set():
+                self._queue.put(("utterance", clip))
 
     # ---------- player interfaces (CLI / mobile / future audio transport) ----------
 
@@ -370,7 +379,7 @@ class NPCApp:
         if not isinstance(text, str) or not text.strip():
             return False
         with self._lock:
-            if not self._accepting:
+            if not self._accepting or self._resetting.is_set():
                 return False
             self._queue.put(("say", text.strip()))
         return True
@@ -397,7 +406,8 @@ class NPCApp:
             self._emit(RecordingDiscarded("too short"))
             return False
         with self._lock:
-            if not self._accepting or self._state is not State.IDLE:
+            if (not self._accepting or self._resetting.is_set()
+                    or self._state is not State.IDLE):
                 return False
             self._queue.put(("utterance", owned))
         return True
@@ -408,16 +418,18 @@ class NPCApp:
             return False
         return self._cmd_npc(name.strip())
 
-    def speak_npc(self, npc_id: str, attitude: str) -> bool:
-        """Queue a targeted, one-shot GM speech cue using an exact NPC ID."""
-        if (not isinstance(npc_id, str) or not isinstance(attitude, str)
-                or attitude not in SPEECH_ATTITUDES):
+    def speak_npc(self, npc_id: str, attitude: str | None = None, *,
+                  action: str | None = None) -> bool:
+        """Queue sheet-based speech; the legacy attitude argument is ignored."""
+        if (not isinstance(npc_id, str)
+                or (action is not None
+                    and (not isinstance(action, str) or action not in SPEECH_ACTIONS))):
             return False
         with self._lock:
-            if (not self._accepting or npc_id not in self.roster
+            if (not self._accepting or self._resetting.is_set() or npc_id not in self.roster
                     or self._state is State.RECORDING):
                 return False
-            self._queue.put(("speak", (npc_id, attitude)))
+            self._queue.put(("speak", (npc_id, action)))
         return True
 
     def stop_speaking(self) -> None:
@@ -426,6 +438,71 @@ class NPCApp:
             speaker = self.speaker if self._state is State.SPEAKING else None
         if speaker is not None:
             speaker.stop()
+
+    def reset_session(self) -> bool:
+        """Interrupt old work and wait for the worker's complete campaign reset.
+
+        Network callbacks call this public method off their event loop. A
+        blocking model call must return before cleanup can be acknowledged.
+        """
+        with self._lock:
+            if (not self._accepting or self._resetting.is_set()
+                    or self._worker is None or not self._worker.is_alive()):
+                return False
+            self._resetting.set()
+            recording = self._state is State.RECORDING
+            if recording:
+                self._state = State.PROCESSING
+            speaker = self.speaker
+        done: Future = Future()
+        try:
+            if speaker is not None:
+                speaker.stop()
+            if recording and self.recorder is not None:
+                self.recorder.stop()  # discard the clip, including any VAD callback
+        except Exception:
+            self._resetting.clear()
+            self._set_state_if({State.PROCESSING}, State.IDLE)
+            raise
+        with self._lock:
+            if not self._accepting:
+                self._resetting.clear()
+                return False
+            self._queue.put(("reset", done))
+        return done.result()
+
+    def _check_session_reset(self) -> None:
+        if self._resetting.is_set():
+            raise _SessionReset
+
+    def _reset_session(self) -> None:
+        """Worker-only: prepare fresh slots, clean disk, then replace memory."""
+        lore_cache = {}
+        roster = {ref.stem: load_slot(ref, self.config, lore_cache=lore_cache)
+                  for ref in discover_character_files(self.config.campaign_dir)}
+        if not roster:
+            raise ValueError("No characters found for session reset")
+        adventure = (self.config.adventure_file.read_text(encoding="utf-8")
+                     if self.config.adventure_file.exists() else "")
+        session_no = max(slot.logbook.next_session_number() for slot in roster.values())
+        active = roster.get(self.active.stem, next(iter(roster.values())))
+        speaker = self._speaker_for(active)
+        clear_session_directories(self.config.campaign_dir)
+        with self._disclosure_lock:
+            with self._lock:
+                self.active = active
+                self.speaker = speaker
+                self.roster = roster
+            self._disclosure_decisions.clear()
+        self.adventure = adventure
+        self.transcript = Transcript(self.config.sessions_dir)
+        self.session_no = session_no
+        self._player_turns = 0
+        self._silence_hinted = False
+        self._ctx_warned = False
+        self._last_turn = None
+        self._turn_totals.clear()
+        self._emit(SecretDisclosuresChanged())
 
     def player_status(self) -> dict:
         """Explicit player-safe snapshot: no model config, GM notes or memory."""
@@ -478,7 +555,7 @@ class NPCApp:
                 or not isinstance(decision, str) or decision not in ("approved", "rejected")):
             return False
         with self._lock:
-            if not self._accepting:
+            if not self._accepting or self._resetting.is_set():
                 return False
             self._queue.put(("disclosure", (request_id, decision)))
         return True
@@ -487,6 +564,8 @@ class NPCApp:
 
     def handle_line(self, line: str) -> str:
         """Returns "ok", "end" (quit + summarize) or "quit" (no summary)."""
+        if self._resetting.is_set():
+            return "ok"
         line = line.strip()
         if not line:
             return "ok"
@@ -560,11 +639,18 @@ class NPCApp:
     def _worker_loop(self) -> None:
         while True:
             item = self._queue.get()
+            reset_done = None
+            reset_error = None
             try:
                 if item is None:
                     return
                 kind, payload = item
-                if kind == "utterance":
+                if kind == "reset":
+                    reset_done = payload
+                    self._reset_session()
+                elif self._resetting.is_set():
+                    continue  # discard pre-reset actions, including saves and approvals
+                elif kind == "utterance":
                     self._handle_utterance(payload)
                 elif kind == "say":
                     self._emit(PlayerSpoke(payload))
@@ -573,12 +659,10 @@ class NPCApp:
                     self._add_ooc(payload)
                 elif kind == "npc":
                     self._switch_npc(payload)
-                elif kind == "opening":
-                    self._greet_npc()
                 elif kind == "speak":
-                    stem, attitude = payload
-                    self._switch_npc(stem, greet=False)
-                    self._greet_npc(attitude=attitude)
+                    stem, action = payload
+                    self._switch_npc(stem)
+                    self._speak_npc(action=action)
                 elif kind == "secret":
                     self._resolve_secret(*payload)
                 elif kind == "disclosure":
@@ -593,10 +677,19 @@ class NPCApp:
                         self._write_logbook_entries("save")
                     else:
                         self._emit(Info("[nothing to save yet]"))
+            except _SessionReset:
+                pass
             except Exception as e:
+                reset_error = e
                 self._emit(ErrorOccurred(str(e)))
             finally:
                 self._set_state_if({State.PROCESSING, State.SPEAKING}, State.IDLE)
+                if reset_done is not None:
+                    self._resetting.clear()
+                    if reset_error is not None:
+                        reset_done.set_exception(reset_error)
+                    else:
+                        reset_done.set_result(True)
                 self._queue.task_done()
 
     def _handle_utterance(self, clip: AudioClip) -> None:
@@ -612,6 +705,7 @@ class NPCApp:
             return
         t0 = time.perf_counter()
         text = self.transcriber.transcribe(clip)
+        self._check_session_reset()
         stt_seconds = time.perf_counter() - t0
         if not text:
             self._emit(HeardNothing())
@@ -652,6 +746,7 @@ class NPCApp:
             topics = {s.id: s.hint for s in slot.secrets.locked()
                       if s.id not in slot.denied_secrets}
             selected = select_topic(text, topics, messages) if topics else None
+            self._check_session_reset()
             secret_topics = {selected} if selected in topics else set()
         system = self._system_prompt(slot, secret_topics=secret_topics)
         self._warn_if_over_budget(system, messages)
@@ -659,6 +754,7 @@ class NPCApp:
         timings: dict[str, float] = {}
         requested = self._reply_turn(slot, system, messages, timings, text,
                                      secret_topics=secret_topics)
+        self._check_session_reset()
         self._player_turns += 1
         slot.player_turns += 1
         slot.dirty = True
@@ -707,6 +803,7 @@ class NPCApp:
         """LLM → language check → secret markers → history → TTS, shared by
         player turns and secret-delivery turns. Returns True when the reply
         opened a new secret-reveal request."""
+        self._check_session_reset()
         language = self.config.language_for(slot.stem)
         language_name = LANGUAGES[language][1]
         stall = ("Hm. Laissez-moi un instant pour y réfléchir."
@@ -733,6 +830,7 @@ class NPCApp:
             timings.clear()
             t = time.perf_counter()
             raw = self.llm.chat(system, messages)
+            self._check_session_reset()
             reply = extract_dialogue(strip_markers(raw), self.npc_name)
             if looks_foreign(reply, language):  # voice must match the reply language
                 self._emit(Info(f"[reply was not in {language_name} — asking again]"))
@@ -742,11 +840,13 @@ class NPCApp:
                      f"GM NOTE (out-of-character): You broke the {language_name}-only "
                      f"rule. Give that reply again, entirely in {language_name}."},
                 ])
+                self._check_session_reset()
                 reply = extract_dialogue(strip_markers(raw), self.npc_name)
             if reply_repeats(reply, previous, include_short=opening) and not repeated_retry:
                 self._emit(Info("[repeated reply — asking again before speaking]"))
                 raw = self.llm.chat(system, self._repetition_retry(
                     messages, language, player_line, opening=opening))
+                self._check_session_reset()
                 reply = extract_dialogue(strip_markers(raw), self.npc_name)
             if reply_repeats(reply, previous, include_short=opening):
                 raise LlmError(
@@ -765,14 +865,17 @@ class NPCApp:
                 if looks_foreign(reply, language):  # retry failed too — never voice this
                     self._emit(Info(f"[reply still not in {language_name} — shown, not spoken]"))
                 elif self._set_state_if({State.PROCESSING}, State.SPEAKING):
+                    self._check_session_reset()
                     t = time.perf_counter()
                     self.speaker.say(reply)
                     timings["speak"] = time.perf_counter() - t
         else:
+            self._check_session_reset()
             reply, cancelled, marker_ids = result
             requested = self._handle_markers(
                 slot, sorted(secret_topics) if secret_topics is not None else marker_ids, player_line)
             if not reply and requested and not cancelled:
+                self._check_session_reset()
                 reply = stall  # marker-only reply: never dead air
                 self.speaker.say(reply)
             if reply:  # "" = barged in before any audio
@@ -844,6 +947,7 @@ class NPCApp:
                 scrub = MarkerScrubber()
                 t0 = time.perf_counter()
                 for chunk in self.llm.chat_stream(system, messages):
+                    self._check_session_reset()
                     timings.setdefault("first_token", time.perf_counter() - t0)
                     raw.append(chunk)
                     if shown := scrub.feed(chunk):
@@ -904,6 +1008,7 @@ class NPCApp:
                 False, marker_ids)
 
     def _record_npc_reply(self, slot: CharacterSlot, reply: str) -> None:
+        self._check_session_reset()
         slot.history.add_npc(reply)
         slot.turns.append((slot.name, reply))
         self.transcript.append_turn(slot.name, reply)
@@ -1020,7 +1125,7 @@ class NPCApp:
         self._emit(SecretResolved(slot.name, secret.id, True, note))
         self._finish_disclosure(slot, "approved")
         if slot is not self.active:
-            self._switch_npc(slot.stem, greet=False)
+            self._switch_npc(slot.stem)
         self._deliver_secret(slot, secret, note)
 
     def _finish_disclosure(self, slot: CharacterSlot, decision: str) -> None:
@@ -1157,7 +1262,7 @@ class NPCApp:
         if self.state is not State.IDLE:
             self._emit(Info(f"[switching to {found.name} after the current line]"))
         with self._lock:
-            if not self._accepting:
+            if not self._accepting or self._resetting.is_set():
                 return False
             self._queue.put(("npc", found.stem))
         return True
@@ -1171,11 +1276,11 @@ class NPCApp:
                          + ("  [active]" if slot is self.active else ""))
         return "\n".join(lines)
 
-    def _switch_npc(self, stem: str, *, greet: bool = True) -> None:
+    def _switch_npc(self, stem: str) -> None:
         """Worker thread: swap the active slot. Speaker is assigned BEFORE
         the slot so the hotkey thread's barge-in reference never lags."""
         slot = self.roster[stem]
-        if slot is self.active and not greet:
+        if slot is self.active:
             self._emit(Info(f"[already speaking with {slot.name}]"))
             return
         speaker = self._speaker_for(slot)
@@ -1185,14 +1290,13 @@ class NPCApp:
         self._emit(NpcSwitched(slot.name, slot.voice))
         if slot.pending_secret:  # a decision is still owed for this NPC
             self._emit(SecretPending(slot.name, slot.pending_secret))
-        if greet:
-            self._greet_npc()
 
-    def _greet_npc(self, *, attitude: str | None = None) -> None:
-        """Worker-only opening, using the same voice and guards as a reply."""
+    def _speak_npc(self, *, action: str | None = None) -> None:
+        """Worker-only GM speech, using the same voice and guards as a reply."""
         self._set_state_if({State.IDLE}, State.PROCESSING)
         slot = self.active
         system = self._system_prompt(slot, secret_topics=set())
+        _, speech_contexts = split_character_speech(slot.character)
         messages = slot.history.as_messages()
         # Keep the last opening available even after history trimming.
         if slot.last_opening and not any(
@@ -1200,7 +1304,8 @@ class NPCApp:
                 for m in messages):
             messages.append({"role": "assistant", "content": slot.last_opening})
         messages.append({"role": "user", "content": opening_instruction(
-            self.config.language_for(slot.stem), attitude=attitude)})
+            self.config.language_for(slot.stem), action=action,
+            context=speech_contexts.get(action, ""))})
         self._warn_if_over_budget(system, messages)
         self._reply_turn(slot, system, messages, {}, player_line="",
                          secret_topics=set(), opening=True)
@@ -1233,6 +1338,7 @@ class NPCApp:
                 render_turns(slot.turns),
                 slot.logbook.tail(self.config.logbook_sessions_in_prompt),
             )
+            self._check_session_reset()
             slot.logbook.upsert_entry(self.session_no, date.today().isoformat(), body)
             slot.dirty = False
             self._emit(LogbookWritten(str(slot.logbook.path), kind))

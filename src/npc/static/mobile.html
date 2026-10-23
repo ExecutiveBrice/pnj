@@ -40,6 +40,10 @@
     .empty { padding: 20px 0; color: #53665d; }
     details { margin-top: 12px; overflow-wrap: anywhere; }
     details p { white-space: pre-wrap; margin-top: 12px; }
+    fieldset { border: 1px solid #d9dfd4; border-radius: 10px; margin: 18px 0; padding: 14px; }
+    legend { font-weight: 600; padding: 0 6px; }
+    .check { display: flex; gap: 10px; align-items: start; font-weight: 400; }
+    .check input { width: auto; margin-top: 6px; }
     .npc-fields { margin: 16px 0; overflow-wrap: anywhere; }
     .npc-fields dt { font-weight: 600; margin-top: 12px; }
     .npc-fields dd { margin: 2px 0 0; white-space: pre-wrap; }
@@ -81,7 +85,9 @@
         <small id="textHelp">Jusqu’à 12 000 caractères. Le texte saisi sera lu sans réécriture.</small>
         <label for="voiceChoice">Voix du récit</label><select id="voiceChoice"><option value="">Décrire une nouvelle voix</option></select>
         <div id="descriptionField"><label for="storyDescription">Description de la voix</label>
-          <textarea id="storyDescription" maxlength="1000" required>Une voix de conteuse chaleureuse, grave et posée, avec une diction claire et un léger mystère.</textarea></div>
+          <textarea id="storyDescription" maxlength="1000" required>Une voix de conteuse chaleureuse, grave et posée, avec une diction claire et un léger mystère.</textarea>
+          <label class="check"><input type="checkbox" id="storyPrepare">Préparer la description en anglais avec le LLM local (nécessite le serveur de dialogue).</label></div>
+        <div id="storyControls"></div>
         <label for="storyLanguage">Langue du récit</label><select id="storyLanguage" class="language"></select>
         <div class="actions"><button class="primary generate" type="submit" disabled>Générer l’audio</button></div>
       </form>
@@ -93,14 +99,23 @@
       <form id="voiceForm" class="card">
         <h2>Imaginez une voix</h2>
         <p class="muted">Qwen3-TTS VoiceDesign interprète votre description et crée un aperçu vocal.</p>
+        <div class="actions" aria-label="Préréglages de voix">
+          <button type="button" id="trollPreset" data-voice-preset="troll">Troll caverneux</button>
+          <button type="button" data-voice-preset="elf">Elfe</button>
+          <button type="button" data-voice-preset="sprite">Lutin</button>
+          <button type="button" data-voice-preset="dwarf">Nain</button>
+        </div>
         <label for="voiceTitle">Nom de la voix</label><input id="voiceTitle" maxlength="120" required placeholder="Le vieux gardien">
         <label for="voiceDescription">Timbre, rythme, émotion…</label>
         <textarea id="voiceDescription" maxlength="1000" rows="4" required placeholder="Une voix masculine âgée, un timbre grave et légèrement rocailleux, un débit lent et bienveillant."></textarea>
+        <small>Décrivez les propriétés audibles : hauteur, résonance, grain et débit. Les préréglages fournissent une consigne en anglais et gardent la parole en français. Choisissez une voix masculine ou féminine dans les réglages ci-dessous ; ce choix reste indépendant du personnage.</small>
+        <label class="check"><input type="checkbox" id="voicePrepare">Préparer la description en anglais avec le LLM local (nécessite le serveur de dialogue).</label>
+        <div id="voiceControls"></div>
         <label for="voiceText">Texte de l’aperçu</label>
         <textarea id="voiceText" maxlength="500" required>Bonjour, voyageurs. Installez-vous près du feu, je vais vous raconter une histoire.</textarea>
         <label for="voiceLanguage">Langue de l’aperçu</label><select id="voiceLanguage" class="language"></select>
         <div class="actions"><button class="primary generate" type="submit" disabled>Créer et écouter la voix</button></div>
-        <p class="muted" style="margin:16px 0 0"><small>La description est enregistrée pour vos récits. Le timbre peut varier entre les passages : ce mode ne fige pas une identité vocale.</small></p>
+        <p class="muted" style="margin:16px 0 0"><small>La description et les réglages sont enregistrés pour vos récits. Les consignes orientent Qwen sans garantir un timbre exact. Le timbre peut varier entre les passages : ce mode ne fige pas une identité vocale.</small></p>
       </form>
       <h2>Vos voix</h2><div id="voiceLibrary" aria-live="polite"></div>
     </section>
@@ -112,12 +127,55 @@
     'use strict';
     const $ = id => document.getElementById(id);
     let socket, available = false, busy = false, reconnectTimer;
-    let gm = false, npcCards = [], speechAttitudes = [], npcState = 'idle', speechPending = false;
+    let gm = false, npcCards = [], speechActions = [], npcState = 'idle', speechPending = false;
     const speechButtons = new Set();
     const secretViews = new Map();
     const offline = new EchoOffline();
     let storageReady = false, catalogQueue = Promise.resolve();
     const offlineControls = new Set();
+    let voiceProfiles = [], selectedVoiceId = null;
+    function buildVoiceControls(prefix, schema) {
+      const target = $(prefix + 'Controls');
+      if (target.children.length || !schema.length) return;
+      const fieldset = document.createElement('fieldset'), legend = document.createElement('legend');
+      legend.textContent = 'Réglages de la voix'; fieldset.append(legend);
+      const help = document.createElement('p'); help.className = 'muted';
+      help.textContent = 'Ces critères orientent la synthèse et priment sur les propriétés contradictoires de la description.';
+      fieldset.append(help);
+      for (const setting of schema) {
+        const label = document.createElement('label'), select = document.createElement('select');
+        select.id = `${prefix}-${setting.key}`; select.dataset.control = setting.key;
+        label.htmlFor = select.id; label.textContent = setting.label;
+        select.add(new Option('Selon la description', ''));
+        for (const choice of setting.choices) select.add(new Option(choice.label, choice.value));
+        fieldset.append(label, select);
+      }
+      const audioHelp = document.createElement('p'); audioHelp.className = 'muted';
+      audioHelp.textContent = 'Ajustements appliqués au WAV après synthèse : la transposition conserve la durée, la vitesse conserve la hauteur. Des valeurs extrêmes peuvent dégrader le son.';
+      fieldset.append(audioHelp);
+      for (const setting of [
+        {key:'pitch_shift', label:'Transposition (demi-tons ; négatif = plus grave)', min:-12, max:12, step:0.5, value:0},
+        {key:'speed', label:'Vitesse audio (× ; moins de 1 = plus lent)', min:0.5, max:1.5, step:0.05, value:1}
+      ]) {
+        const label = document.createElement('label'), input = document.createElement('input');
+        input.id = `${prefix}-${setting.key}`; input.dataset.control = setting.key;
+        input.type = 'number'; input.min = setting.min; input.max = setting.max; input.step = setting.step; input.value = setting.value; input.required = true;
+        label.htmlFor = input.id; label.textContent = setting.label; fieldset.append(label, input);
+      }
+      target.append(fieldset);
+    }
+    function getVoiceControls(prefix) {
+      const settings = {};
+      $(prefix + 'Controls').querySelectorAll('[data-control]').forEach(input => {
+        if (input.value !== '') settings[input.dataset.control] = input.type === 'number' ? Number(input.value) : input.value;
+      });
+      return settings;
+    }
+    function setVoiceControls(prefix, settings = {}) {
+      $(prefix + 'Controls').querySelectorAll('[data-control]').forEach(input => {
+        input.value = settings[input.dataset.control] ?? (input.type === 'number' ? (input.dataset.control === 'speed' ? 1 : 0) : '');
+      });
+    }
     function notice(text) { $('notice').textContent = text; $('notice').hidden = !text; }
     function controls() {
       document.querySelectorAll('.generate').forEach(button => button.disabled = !available || busy || socket?.readyState !== WebSocket.OPEN);
@@ -143,7 +201,7 @@
       $('pageIntro').textContent = name === 'npcs' ? 'Retrouvez vos PNJ, leurs repères et leurs secrets pendant la partie.' : 'Décrivez une voix, écrivez un récit et retrouvez vos créations à l’écoute.';
     }
     function clearNpcs() {
-      gm = false; npcCards = []; speechAttitudes = []; speechPending = false; secretViews.clear(); speechButtons.clear();
+      gm = false; npcCards = []; speechActions = []; speechPending = false; secretViews.clear(); speechButtons.clear();
       $('npcLibrary').replaceChildren(); $('npcTab').hidden = true;
       if (!$('npcs').hidden) selectTab('stories');
     }
@@ -161,12 +219,12 @@
           term.textContent = label; description.textContent = value || 'Non renseigné'; fields.append(term, description);
         }
         const actions = document.createElement('div'); actions.className = 'actions';
-        const speechLabel = document.createElement('p'); speechLabel.className = 'meta'; speechLabel.textContent = 'Faire parler ce PNJ · attitude pour cette réplique';
+        const speechLabel = document.createElement('p'); speechLabel.className = 'meta'; speechLabel.textContent = 'Faire parler ce PNJ';
         const speech = document.createElement('div'); speech.className = 'npc-speech';
-        for (const attitude of speechAttitudes) {
-          const cue = document.createElement('button'); cue.type = 'button'; cue.textContent = attitude.label;
+        for (const action of speechActions) {
+          const cue = document.createElement('button'); cue.type = 'button'; cue.textContent = action.label;
           cue.addEventListener('click', () => {
-            if (send({type:'speak_npc', npc:npc.id, attitude:attitude.id})) { speechPending = true; npcState = 'processing'; controls(); }
+            if (send({type:'speak_npc', npc:npc.id, action:action.id})) { speechPending = true; npcState = 'processing'; controls(); }
           });
           speechButtons.add(cue); speech.append(cue);
         }
@@ -213,8 +271,23 @@
         const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'none'; audio.src = offline.url(item) || audioUrl(item.audio_url);
         const link = document.createElement('a'); link.href = audio.src; link.download = `${item.title}.wav`; link.textContent = 'Télécharger l’audio';
         const details = document.createElement('details'), summary = document.createElement('summary'), text = document.createElement('p');
-        summary.textContent = 'Texte et voix'; text.textContent = `${item.description}\n\n${item.text}`; details.append(summary, text);
+        summary.textContent = 'Texte, voix et réglages';
+        text.textContent = `${item.description}\n\n${item.text}`;
+        if (item.instruct && item.instruct !== item.description) text.textContent += `\n\nConsigne transmise à Qwen :\n${item.instruct}`;
+        if (item.voice_controls) text.textContent += `\n\nTransposition : ${item.voice_controls.pitch_shift ?? 0} demi-tons · Vitesse : ×${item.voice_controls.speed ?? 1}`;
+        details.append(summary, text);
         card.append(title, meta, audio, link, details);
+        if (target.id === 'voiceLibrary') {
+          const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = 'Ajuster cette voix';
+          edit.addEventListener('click', () => {
+            $('voiceTitle').value = item.title; $('voiceDescription').value = item.description;
+            $('voiceText').value = item.text; $('voiceLanguage').value = item.language;
+            $('voicePrepare').checked = Boolean(item.prepared_description);
+            setVoiceControls('voice', item.voice_controls); selectTab('voices');
+            $('voiceForm').scrollIntoView({behavior:'smooth', block:'start'});
+          });
+          card.append(edit);
+        }
         if (target.id === 'storyLibrary') {
           const status = document.createElement('p'), button = document.createElement('button');
           status.className = 'meta'; button.type = 'button';
@@ -251,6 +324,8 @@
       try { await offline.select(message, persist); }
       catch { storageReady = false; $('offlineHelp').textContent = 'Le stockage local est indisponible. Vous pouvez télécharger les WAV pour les écouter dans votre lecteur audio.'; }
       available = message.available; controls();
+      buildVoiceControls('voice', message.voice_controls || []); buildVoiceControls('story', message.voice_controls || []);
+      voiceProfiles = message.voices;
       notice(available ? '' : 'Pour créer des voix, installez Qwen3-TTS sur le PC avec : uv sync --extra qwen. Les audios existants restent disponibles.');
       for (const select of document.querySelectorAll('.language')) {
         const previous = select.value || 'French'; select.replaceChildren();
@@ -278,7 +353,7 @@
           npcState = message.state;
           if (gm) selectTab('npcs');
         }
-        if (message.type === 'gm_npc_list' && gm) { npcCards = message.npcs; speechAttitudes = message.speech_attitudes || []; renderNpcs(); }
+        if (message.type === 'gm_npc_list' && gm) { npcCards = message.npcs; speechActions = message.speech_actions || []; renderNpcs(); }
         if (message.type === 'state' || message.type === 'status') { speechPending = false; npcState = message.state; controls(); }
         if (message.type === 'gm_npc_secrets') showNpcSecrets(message);
         if (message.type === 'studio_catalog') catalogQueue = catalogQueue.then(() => catalog(message)).catch(() => notice('Impossible de lire la bibliothèque.'));
@@ -302,7 +377,14 @@
       socket.addEventListener('close', () => { clearNpcs(); $('connection').textContent = 'Hors ligne · écoute des copies locales disponible'; finish(); available = false; controls(); reconnectTimer = setTimeout(connect, 2000); });
       socket.addEventListener('error', () => socket.close());
     }
-    function voiceChanged() { const custom = !$('voiceChoice').value; $('descriptionField').hidden = !custom; $('storyDescription').required = custom; }
+    function voiceChanged() {
+      const id = $('voiceChoice').value, custom = !id;
+      $('descriptionField').hidden = !custom; $('storyDescription').required = custom;
+      if (id !== selectedVoiceId) {
+        const voice = voiceProfiles.find(item => item.id === id);
+        setVoiceControls('story', voice?.voice_controls); selectedVoiceId = id;
+      }
+    }
     $('voiceChoice').addEventListener('change', voiceChanged);
     $('mode').addEventListener('change', () => {
       const generated = $('mode').value === 'generate_story';
@@ -310,12 +392,48 @@
       $('storyText').maxLength = generated ? 2000 : 12000;
       $('textHelp').textContent = generated ? 'Jusqu’à 2 000 caractères. Le LLM local écrit le récit, puis Qwen le lit.' : 'Jusqu’à 12 000 caractères. Le texte saisi sera lu sans réécriture.';
     });
-    $('voiceForm').addEventListener('submit', event => { event.preventDefault(); start({type:'voice_design', title:$('voiceTitle').value, description:$('voiceDescription').value, text:$('voiceText').value, language:$('voiceLanguage').value}); });
+    const voicePresets = {
+      troll: {
+        title:'Vieux troll',
+        description:'An enormous fantasy humanoid creature. An extremely deep bass voice, cavernous and guttural, with massive dark throat resonance as if the mouth and neck were gigantic. A rough low growl remains audible underneath the words. Thick dark vowels and heavy consonants. Slow, deliberate, nearly monotone speech. Clearly intelligible French despite the beastly vocal texture.',
+        text:'Qui ose entrer dans ma caverne ? Approchez, petites créatures. Je vous écoute.',
+        controls:{pitch:'very_low', intonation:'flat', pace:'slow', texture:'guttural', resonance:'cavernous', pitch_shift:-3, speed:0.9}
+      },
+      elf: {
+        title:'Elfe',
+        description:'An adult fantasy elf with an elegant, clear, smooth voice. Light, luminous resonance with a subtle airy softness, precise consonants and flowing vowels. Calm, poised delivery with graceful, restrained pitch movements and measured pauses. Natural spoken French, fully intelligible, without singing or exaggerated theatricality.',
+        text:'Les arbres se souviennent de vos pas. Écoutez le vent : il nous indique le chemin.',
+        controls:{pitch:'medium', intonation:'restrained', pace:'moderate', texture:'clear', pitch_shift:0, speed:1}
+      },
+      sprite: {
+        title:'Lutin',
+        description:'An adult small fantasy sprite with a bright, high-pitched, nimble voice. Light, slightly nasal resonance, crisp consonants and lively, playful pitch changes. Quick, mischievous speech with short rhythmic pauses. Natural spoken French with clear words, without squealing, baby talk or singing.',
+        text:'Par ici ! Je connais un raccourci. Mais attention : les champignons sont de mauvaise humeur !',
+        controls:{pitch:'high', intonation:'expressive', pace:'fast', texture:'clear', resonance:'nasal', pitch_shift:2, speed:1.05}
+      },
+      dwarf: {
+        title:'Nain',
+        description:'An adult fantasy dwarf with a low, compact, robust voice. Full chest resonance, a dry gravelly texture and solid consonants. Steady, deliberate phrasing with restrained pitch changes and a blunt, grounded delivery. Clearly intelligible natural French, without shouting, singing or an exaggerated accent.',
+        text:'Par la forge de mes ancêtres ! Cette porte tiendra bon. Apportez mon marteau, nous avons du travail.',
+        controls:{pitch:'low', intonation:'restrained', pace:'moderate', texture:'raspy', resonance:'chest', pitch_shift:-2, speed:0.95}
+      }
+    };
+    document.querySelectorAll('[data-voice-preset]').forEach(button => button.addEventListener('click', () => {
+      const preset = voicePresets[button.dataset.voicePreset];
+      const gender = getVoiceControls('voice').gender;
+      $('voiceTitle').value = preset.title; $('voiceDescription').value = preset.description;
+      $('voiceLanguage').value = 'French'; $('voicePrepare').checked = false;
+      $('voiceText').value = preset.text;
+      setVoiceControls('voice', {...preset.controls, ...(gender ? {gender} : {})});
+    }));
+    $('voiceForm').addEventListener('submit', event => { event.preventDefault(); start({type:'voice_design', title:$('voiceTitle').value, description:$('voiceDescription').value, text:$('voiceText').value, language:$('voiceLanguage').value, prepare_description:$('voicePrepare').checked, voice_controls:getVoiceControls('voice')}); });
     $('storyForm').addEventListener('submit', event => {
       event.preventDefault(); const kind = $('mode').value;
       const message = {type:kind, title:$('storyTitle').value, language:$('storyLanguage').value};
+      message.voice_controls = getVoiceControls('story');
       message[kind === 'generate_story' ? 'prompt' : 'text'] = $('storyText').value;
-      if ($('voiceChoice').value) message.voice_id = $('voiceChoice').value; else message.description = $('storyDescription').value;
+      if ($('voiceChoice').value) message.voice_id = $('voiceChoice').value;
+      else { message.description = $('storyDescription').value; message.prepare_description = $('storyPrepare').checked; }
       start(message);
     });
     $('cancel').addEventListener('click', () => { send({type:'studio_cancel'}); $('jobText').textContent = 'Annulation après le chargement ou le passage en cours…'; });

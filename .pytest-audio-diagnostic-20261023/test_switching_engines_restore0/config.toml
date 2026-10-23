@@ -1,0 +1,18 @@
+language = "fr"
+[tts]
+voice = "estelle"
+backend = "pocket"
+
+[tts.voices]
+"garde" = "marius"
+
+[llm]
+model = "keep-this-model"
+
+[tts.voice_presets.piper]
+"" = "fr_FR-siwis-medium"
+"garde" = "fr_FR-mls-medium"
+
+[tts.voice_presets.pocket]
+"" = "estelle"
+"garde" = "marius"

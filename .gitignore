@@ -16,3 +16,5 @@ campaigns/
 *.onnx.json
 /voix/
 /histoires/
+/tools/pocket_tts/outputs/
+/tools/pocket_tts/.cache/

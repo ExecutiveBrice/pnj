@@ -1,8 +1,7 @@
-"""Shared identifiers and labels for one-shot GM speech cues (import-light)."""
+"""Shared actions for sheet-based GM speech cues (import-light)."""
 
-SPEECH_ATTITUDES = {
-    "agacement": "Agacement",
-    "amusant": "Amusant",
-    "rude": "Rude",
-    "complaisant": "Complaisant",
+SPEECH_ACTIONS = {
+    "presentation": "Présentation",
+    "fill_wait": "Meubler pour attendre",
+    "greeting": "Salutation",
 }

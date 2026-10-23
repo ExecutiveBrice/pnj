@@ -20,6 +20,15 @@ uv run npc gui campaigns/demo
 `doctor` vérifie les services locaux, les modèles, l'audio et la campagne.
 Le modèle de dialogue par défaut est `qwen2.5:7b-instruct` sur
 `http://localhost:11434` ; Ollama doit être démarré pour les dialogues.
+Les réglages facultatifs `[llm] temperature` et `top_p` sont transmis aux deux
+backends, y compris en streaming ; `top_k` et `repeat_penalty` sont réservés à
+Ollama. Sans ces clés, le moteur conserve les valeurs du serveur. Pour examiner
+une dérive de dialogue, commencer par `temperature = 0.2` en ne changeant qu'un
+réglage à la fois. Une température faible réduit la variété, sans garantir la
+justesse : `0` peut reproduire systématiquement une inversion de rôles.
+`num_ctx = 8192` permet de conserver davantage de contexte sous Ollama lorsque
+les fiches et l'historique le nécessitent ; augmenter cette valeur ne corrige
+pas à lui seul le raisonnement et consomme davantage de mémoire.
 Piper utilise par défaut les voix de `~/.local/share/npc/voices/`.
 Selon le système, PortAudio et Tk doivent aussi être installés pour le son et
 l'interface de bureau. La configuration complète est commentée dans
@@ -45,20 +54,27 @@ Une ligne sans commande donne une consigne au MJ. `/npc` liste les personnages,
 `/save` résume la session, `/end` termine en sauvegardant et `/quit` termine sans
 résumé final. Les transcriptions sont écrites au fil des échanges.
 
-À l'ouverture de la session et à chaque sélection d'un PNJ, celui-ci prend la
-parole avec une courte phrase d'accueil générée pour l'occasion. Elle tient
-compte de sa fiche, du lore, de son journal, des consignes MJ et des échanges
-de la session. Revenir sur un personnage (ou le sélectionner à nouveau) produit
-un nouvel accueil, avec sa voix et sa langue, sans compter comme un tour joueur.
+Dans l’interface de bureau, l’onglet **test** permet d’écouter les voix du
+générateur sélectionné avec un texte modifiable (500 caractères maximum), puis
+d’arrêter l’essai. Il propose les voix Piper installées, les voix Pocket TTS ou
+les descriptions Qwen VoiceDesign configurées dans la campagne. **Actualiser**
+relit les voix disponibles après une installation. Les essais se font hors
+session, sans micro ni serveur de dialogue, et ne changent pas les voix des PNJ.
+Le premier chargement peut nécessiter le téléchargement du modèle vocal.
+
+L'ouverture de la session, la sélection d'un PNJ et `/reload` ne déclenchent
+aucune génération de phrase ni prise de parole. Le PNJ attend une parole du
+joueur ou une demande explicite du MJ via **Faire parler un PNJ**.
 
 Dans l’interface de bureau, la zone **Faire parler un PNJ** permet de choisir
-un personnage et de déclencher une réplique avec l’un des quatre boutons :
-**Agacement**, **Amusant**, **Rude**, **Complaisant**. La réplique réagit à la
-situation et aux derniers échanges ; l’attitude choisie vaut pour cette seule
-prise de parole. Elle conserve la voix, la langue, les objectifs et les limites
-du PNJ, sans compter comme un tour joueur ni modifier ses consignes permanentes.
-Une commande reçue pendant un échange attend son tour ; un enregistrement en
-cours doit être terminé avant de déclencher cette prise de parole.
+un personnage et de déclencher une **Présentation**, une réplique pour
+**Meubler pour attendre** ou une **Salutation**. Sa personnalité, son attitude
+et sa façon de parler proviennent de sa fiche ; aucun ton de réplique n'est
+ajouté. La synthèse utilise la voix attribuée au PNJ dans la campagne.
+Ces actions ne comptent pas comme un tour joueur et ne modifient pas ses
+consignes permanentes. Une commande reçue pendant un échange attend son tour ;
+un enregistrement en cours doit être terminé avant de déclencher cette prise
+de parole.
 
 ## Campagnes
 
@@ -100,6 +116,31 @@ leurs métadonnées JSON. Les anciennes bibliothèques `voice_studio/` restent l
 Les WAV déposés directement dans `histoires/` apparaissent aussi dans la bibliothèque,
 avec le texte du fichier `.md` de même nom lorsqu'il existe, sans charger de modèle.
 
+Dans l’onglet **Voix**, quatre préréglages proposent des descriptions acoustiques
+en anglais, avec une parole en français : **Troll caverneux** (très grave, lent,
+guttural et presque monotone), **Elfe** (clair, fluide et posé), **Lutin** (aigu,
+vif et espiègle) et **Nain** (grave, rocailleux et ferme).
+**Sexe de la voix** permet de choisir **Masculine**, **Féminine** ou de suivre
+la description. Ce choix est indépendant du préréglage et reste sélectionné
+quand vous changez de préréglage. Il est enregistré avec la voix et repris pour
+les récits, où il peut aussi être modifié. Les réglages **Hauteur**, **Musicalité / intonation**,
+**Débit de parole**, **Grain** et **Résonance** complètent la description et
+priment sur ses propriétés contradictoires. Ils orientent Qwen sans garantir
+un timbre précis, notamment pour les créatures fantastiques.
+**Préparer la description en anglais** fait traduire vos consignes par le LLM
+configuré pour la campagne ; cette option nécessite son serveur, mais ne lui
+transmet que la description de voix. Elle reste facultative.
+
+**Transposition** modifie réellement le WAV en demi-tons, sans modifier sa durée
+(une valeur négative rend la voix plus grave). **Vitesse audio** modifie la
+durée sans modifier la hauteur (`0.9` ralentit, `1.1` accélère). Ces traitements
+utilisent les dépendances de l’option `qwen` ; les valeurs extrêmes peuvent
+introduire des artefacts. Le préréglage troll démarre à `-3` demi-tons et `0.9×`.
+La description originale, la consigne transmise au moteur et les réglages sont
+conservés avec le profil. **Ajuster cette voix** permet de repartir d’un aperçu
+enregistré ; les récits reprennent ses réglages et permettent de les modifier.
+VoiceDesign peut varier d’un passage à l’autre, même avec ces réglages.
+
 Dans **Vos histoires**, toucher **Conserver hors ligne** pendant la connexion au
 PC copie le WAV et ses informations sur le téléphone. Attendre la mention
 **Disponible hors ligne sur ce téléphone** avant de se déconnecter : l'écoute
@@ -123,13 +164,36 @@ secrets (`mobile.secret_approval = true`). Utiliser `false` pour les clients
 joueurs. L'accès réseau est sans authentification par défaut : réserver l'écoute
 LAN à un réseau de confiance, surtout en mode MJ.
 
+Le client Écho peut envoyer `{ "type": "reset_session" }` sur `/ws` depuis
+une connexion MJ. Le serveur interrompt la parole et le studio vocal, abandonne
+les actions en attente, annule les demandes de divulgation et recrée les états
+conversationnels de tous les PNJ. Il vide ensuite les dossiers explicites
+`session/` (nom du contrat Écho) et `sessions/` (transcriptions du moteur) de la
+campagne active. Aucun chemin fourni par le client n'est utilisé. Les fiches,
+le lore, les journaux persistants, les secrets déjà autorisés, les réglages,
+les voix et les histoires sont conservés.
+
+La réponse `{ "type": "session_reset" }` est envoyée au demandeur uniquement
+après la réussite complète ; Écho peut alors effacer son historique local et se
+déconnecter. Une commande refusée ou un échec retourne `error`, sans confirmation
+de réussite. Les liens symboliques et jonctions dans les dossiers à vider sont
+refusés avant toute suppression. Un appel de modèle déjà bloqué doit revenir
+avant la confirmation ; son résultat est abandonné. En cas d'erreur pendant la
+suppression, certains fichiers peuvent déjà avoir été retirés ; corriger la
+cause puis réessayer la commande.
+
 L’onglet **PNJ · MJ** présente chaque personnage, même inactif : scénario,
 attitude, motivation, levier de négociation et nombre de secrets. Une recherche
 filtre les noms et scénarios. **Voir les secrets** charge leurs textes pour le
 MJ ; cette consultation ne sélectionne pas le PNJ et n’autorise aucune révélation.
-Les mêmes quatre boutons **Agacement**, **Amusant**, **Rude**, **Complaisant**
-sont disponibles directement sur chaque fiche et sélectionnent le PNJ avec une
-seule réplique dans ce ton. Cette télécommande est réservée aux connexions MJ.
+Les actions **Présentation**, **Meubler pour attendre** et **Salutation**
+sont disponibles sur chaque fiche et sélectionnent le PNJ pour une réplique
+fondée sur ses informations. Cette télécommande est réservée aux connexions MJ.
+Le serveur accepte `speak_npc` avec `npc` et une `action` facultative ;
+`gm_npc_list.speech_actions` fournit les identifiants et libellés disponibles.
+Sans action, le PNJ réagit à la situation actuelle. Les anciens champs
+`attitude` sont ignorés, y compris ceux envoyés par le client Ionic Écho :
+ils n'influencent ni le texte ni la voix.
 Les attributs se renseignent directement dans chaque fiche Markdown :
 
 ```markdown
@@ -137,7 +201,25 @@ Les attributs se renseignent directement dans chaque fiche Markdown :
 - Attitude : Fière, juste.
 - Motivation : Obtenir du bon grain et un poulailler réparé.
 - Levier de négociation : Une promesse précise devant témoin.
+- Introduction : « Bienvenue dans ma boutique de grains. »
+- Meuble : « Cette pluie va encore faire gonfler mes sacs. »
+- Salutation : « Bonne route, et revenez avant la prochaine récolte. »
 ```
+
+Les actions mobiles `presentation`, `fill_wait` et `greeting` utilisent respectivement
+**Introduction**, **Meuble** et **Salutation** comme référence pour inventer une
+nouvelle réplique fidèle à la fiche. Une salutation peut être un au revoir si
+la référence le prévoit. Ces trois références peuvent aussi occuper des sections
+`## Introduction`, `## Meuble` et `## Salutation`. Seule la référence de l'action
+demandée entre dans sa consigne ponctuelle ; elles sont retirées du contexte
+permanent et ne deviennent pas des souvenirs. Sans référence, l'action conserve
+sa consigne générale. `/reload` prend en compte leurs modifications.
+
+Le nom du fichier définit l'identifiant utilisé par l'application et les voix :
+`zones/village/characters/barnabe.md` donne `village/barnabe`, indépendamment d'un
+ancien numéro comme `VILLAGE-02` écrit dans la fiche. Après un renommage, adapter
+les clés de voix et de langue dans `config.toml`, ainsi que les chemins des
+éventuels secrets, journaux et lore propres au PNJ, puis relancer l'application.
 
 Le compteur additionne les confidences de la fiche (`- Cache : ...` ou les
 puces sous `## Secrets` / `## Secrets locaux`) et les entrées de son fichier
@@ -182,6 +264,14 @@ Deux scripts manuels restent utiles après modification des prompts :
 `uv run python scripts/probe_secrets.py [modele] [repetitions]`.
 Ils utilisent les modèles réels et les templates intégrés, sans modifier une
 campagne personnelle. Leurs résultats nécessitent une lecture humaine.
+`uv run python scripts/probe_narration.py [modele] --coherence` utilise des fiches
+fictives et examine en français et en anglais qui rend le service et qui paie,
+une inversion de rôles à rectifier, un changement explicite de marché et la
+distinction entre une offre et un travail déjà accompli. Les attentes sont
+affichées pour chaque cas ; cette sonde ne valide pas automatiquement le sens.
+Elle couvre aussi l'achat d'une corde apportée par les joueurs, sa vente par le
+PNJ et une simple intention de chercher du matériel. Ajouter `--temperature 0.2`
+pour comparer ce réglage au comportement du serveur sur les mêmes historiques.
 
 La carte du code est dans [ARCHITECTURE.md](ARCHITECTURE.md) et les conventions
 de maintenance dans [AGENTS.md](AGENTS.md). Licence : [AGPL-3.0](LICENSE).

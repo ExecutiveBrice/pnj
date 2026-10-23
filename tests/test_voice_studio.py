@@ -77,6 +77,69 @@ def test_generate_story_uses_only_the_user_idea_without_campaign_secrets(studio)
     assert studio.config.campaign_dir.name not in system
 
 
+@pytest.mark.parametrize("gender", ["male", "female"])
+def test_voice_directions_and_translation_survive_profile_reuse(studio, gender):
+    llm_calls = []
+
+    def translate(system, messages):
+        llm_calls.append((system, messages))
+        return "An enormous creature with a cavernous bass voice."
+
+    studio.llm_factory = lambda: SimpleNamespace(chat=translate)
+    settings = {"pitch": "very_low", "intonation": "flat", "texture": "guttural",
+                "gender": gender}
+    voice = studio.run(request(studio, prepare_description=True, voice_controls=settings))["item"]
+    assert voice["description"] == "Grave et calme."
+    assert voice["prepared_description"] == "An enormous creature with a cavernous bass voice."
+    assert voice["voice_controls"] == settings
+    assert "low bass" in studio.calls[0][1] and "Nearly monotone" in studio.calls[0][1]
+    assert "low growl" in studio.calls[0][1]
+    assert ("A masculine-sounding" if gender == "male" else "A feminine-sounding") in (
+        studio.calls[0][1])
+    assert llm_calls[0][1] == [{"role": "user", "content": "Grave et calme."}]
+    assert "Translate" in llm_calls[0][0]
+    studio.llm_factory = lambda: pytest.fail("saved instructions must not be translated again")
+    story = studio.run(request(studio, "narrate_text", voice_id=voice["id"]))["item"]
+    assert story["instruct"] == voice["instruct"] == studio.calls[-1][1]
+    assert story["voice_controls"] == settings
+    assert len(llm_calls) == 1
+    assert StubStudio(studio.config).catalog()["voices"] == [voice]
+
+
+def test_voice_audio_adjustments_are_applied_before_export(studio, monkeypatch):
+    calls = []
+
+    def process(pcm, rate, settings):
+        calls.append((rate, settings))
+        return np.full(480, 456, dtype=np.int16)
+
+    monkeypatch.setattr("npc.voice_studio.apply_voice_controls", process)
+    settings = {"pitch_shift": -3, "speed": 0.8}
+    voice = studio.run(request(studio, voice_controls=settings))["item"]
+    assert calls == [(24000, settings)] and voice["duration"] == 480 / 24000
+    with wave.open(str(studio.audio_path(voice["id"]))) as audio:
+        assert audio.getnframes() == 480 and audio.getframerate() == 24000
+        assert np.frombuffer(audio.readframes(480), dtype="<i2").tolist() == [456] * 480
+    # A caller can override saved processing, including resetting it to neutral.
+    story = studio.run(request(studio, "narrate_text", voice_id=voice["id"],
+                               voice_controls={"pitch_shift": 0, "speed": 1}))["item"]
+    assert story["voice_controls"] == {"pitch_shift": 0, "speed": 1}
+
+
+def test_cancel_after_preparing_voice_never_loads_qwen(studio):
+    cancel = threading.Event()
+
+    def translate(*args):
+        cancel.set()
+        return "A deep voice."
+
+    studio.llm_factory = lambda: SimpleNamespace(chat=translate)
+    studio.runtime_factory = lambda *args: pytest.fail("model loaded after cancellation")
+    with pytest.raises(StudioCancelled):
+        studio.run(request(studio, prepare_description=True), cancel=cancel)
+    assert not list(studio.folder.rglob("*.wav"))
+
+
 def test_legacy_library_still_plays_without_moving_old_files(studio):
     voice = studio.run(request(studio))["item"]
     folder = studio.config.campaign_dir
@@ -197,7 +260,10 @@ def test_metadata_failure_leaves_no_incomplete_story(studio, monkeypatch):
 
 
 @pytest.mark.parametrize("values", [{"text": ""}, {"text": "a" * 12001}, {"language": "Klingon"},
-                                    {"description": []}, {"voice_id": "unknown"}])
+                                    {"description": []}, {"voice_id": "unknown"},
+                                    {"voice_controls": {"pitch_shift": -99}},
+                                    {"voice_controls": {"intonation": []}},
+                                    {"prepare_description": "yes"}])
 def test_invalid_input_never_starts_inference(studio, values):
     with pytest.raises(ValueError):
         request(studio, "narrate_text", **values)
@@ -251,13 +317,17 @@ def test_mobile_creates_voice_then_downloads_seekable_wav_and_lists_library(stud
     base = f"http://127.0.0.1:{server.port}"
     with connect(f"ws://127.0.0.1:{server.port}/ws") as ws:
         assert receive_until(ws, "hello")["capabilities"]["voice_design"]
-        ws.send(json.dumps({"type": "voice_design", "title": "Gardien", "description": "Grave."}))
+        ws.send(json.dumps({"type": "voice_design", "title": "Gardien", "description": "Grave.",
+                            "voice_controls": {"intonation": "flat", "pitch": "very_low"}}))
         receive_until(ws, "studio_started")
         result = receive_until(ws, "studio_result")
+        assert result["item"]["voice_controls"] == {"intonation": "flat", "pitch": "very_low"}
+        assert "Nearly monotone" in result["item"]["instruct"]
         url = base + result["item"]["audio_url"]
         with httpx.Client(trust_env=False) as http:
             page = http.get(base + "/")
             assert page.status_code == 200 and "Le studio du conteur" in page.text
+            assert 'id="trollPreset"' in page.text and 'id="voiceControls"' in page.text
             assert page.headers["content-type"].startswith("text/html")
             audio = http.get(url)
             assert audio.status_code == 200 and audio.content[:4] == b"RIFF"

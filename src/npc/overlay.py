@@ -25,6 +25,7 @@ from http import HTTPStatus
 from importlib import resources
 
 from .events import Event
+from .websocket_logging import logger as websocket_logger
 
 
 def event_to_json(event: Event) -> str:
@@ -97,7 +98,8 @@ class OverlayServer:
         self._loop = asyncio.get_running_loop()
         self._stop_future = self._loop.create_future()
         async with serve(self._handler, self.listen, self.port,
-                         process_request=self._process_request) as server:
+                         process_request=self._process_request,
+                         logger=websocket_logger) as server:
             self.port = server.sockets[0].getsockname()[1]
             self._ready.set()
             await self._stop_future

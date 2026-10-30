@@ -23,6 +23,7 @@ class LlmConfig:
     timeout_seconds: float = 60.0  # per-request cap; a hung server becomes an error, not a stuck session
     retries: int = 1  # extra attempts after connection-level failures (never after HTTP errors)
     stream: bool = True  # speak sentence-by-sentence while the reply generates
+    exchange_tracking: bool = True  # maintain a small exchange state per NPC
     api_key: str = ""  # OpenAI-compatible servers only; NPC_LLM_API_KEY env var overrides
     num_ctx: int | None = None  # Ollama context window; raise when attaching lore
     temperature: float | None = None  # None keeps the server's sampling defaults
@@ -220,6 +221,8 @@ def load_config(campaign_dir: Path) -> Config:
     if (isinstance(config.mobile.port, bool) or not isinstance(config.mobile.port, int)
             or not 1 <= config.mobile.port <= 65535):
         raise ConfigError(f"{toml_path}: mobile.port must be an integer from 1 to 65535")
+    if not isinstance(config.llm.exchange_tracking, bool):
+        raise ConfigError(f"{toml_path}: llm.exchange_tracking must be a boolean")
     ctx = config.llm.num_ctx
     if ctx is not None and (isinstance(ctx, bool) or not isinstance(ctx, int)
                             or ctx <= 0):

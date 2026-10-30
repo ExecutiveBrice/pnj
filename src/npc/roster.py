@@ -17,6 +17,7 @@ import re
 
 from .config import Config
 from .session.history import ConversationHistory
+from .session.exchange import ExchangeMemory
 from .session.logbook import Logbook
 from .session.lore import LoreCache, LoreFile, load_lore
 from .session.secrets import PendingDisclosure, SecretsSheet
@@ -140,6 +141,7 @@ class CharacterSlot:
     shared_lore_files: tuple[Path, ...] = ()
     last_opening: str | None = None
     details: CharacterDetails = field(default_factory=CharacterDetails)
+    exchange: ExchangeMemory = field(default_factory=ExchangeMemory)
 
     def refresh(self, config: Config, *, lore_cache: LoreCache | None = None) -> None:
         """Re-read the character file (/reload). Conversation state is

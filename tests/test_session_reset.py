@@ -138,7 +138,7 @@ def test_reset_clears_every_slot_and_only_session_files(app, campaign, tmp_path)
     assert "Old transcription" not in app.transcript.read()
 
 
-@pytest.mark.parametrize("stage", ["chat", "stream", "transcribe", "summarize"])
+@pytest.mark.parametrize("stage", ["chat", "stream", "transcribe", "summarize", "exchange"])
 def test_reset_waits_for_running_work_and_discards_queued_actions(app, monkeypatch, stage):
     entered, release, closed = threading.Event(), threading.Event(), threading.Event()
 
@@ -147,7 +147,9 @@ def test_reset_waits_for_running_work_and_discards_queued_actions(app, monkeypat
         assert release.wait(5)
         return "Old answer. [CHECK:teleporter-key]"
 
-    if stage == "stream":
+    if stage == "exchange":
+        monkeypatch.setattr(app.llm, "analyze_exchange", block, raising=False)
+    elif stage == "stream":
         def stream(*args):
             try:
                 yield block()

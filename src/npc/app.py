@@ -748,6 +748,22 @@ class NPCApp:
             selected = select_topic(text, topics, messages) if topics else None
             self._check_session_reset()
             secret_topics = {selected} if selected in topics else set()
+        exchange_seconds = 0.0
+        analyze_exchange = getattr(self.llm, "analyze_exchange", None)
+        if self.config.llm.exchange_tracking and callable(analyze_exchange):
+            analysis_start = time.perf_counter()
+            payload = slot.exchange.payload(
+                slot.name, messages, slot.ooc_notes, self.config.language_for(slot.stem))
+            try:
+                raw_state = analyze_exchange(payload)
+                updated = slot.exchange.updated(raw_state, payload)
+            except LlmError:
+                updated = slot.exchange
+                self._emit(Info("[exchange analysis unavailable; keeping previous state]"))
+            self._check_session_reset()
+            slot.exchange = updated
+            exchange_seconds = time.perf_counter() - analysis_start
+            messages = slot.exchange.reply_messages(messages, self.config.language_for(slot.stem))
         system = self._system_prompt(slot, secret_topics=secret_topics)
         self._warn_if_over_budget(system, messages)
 
@@ -763,8 +779,9 @@ class NPCApp:
 
         turn = TurnCompleted(
             stt_seconds=stt_seconds,
-            llm_first_token_seconds=timings.get("first_token"),
-            llm_seconds=timings.get("llm", 0.0),
+            llm_first_token_seconds=(timings["first_token"] + exchange_seconds
+                                     if "first_token" in timings else None),
+            llm_seconds=timings.get("llm", 0.0) + exchange_seconds,
             speak_seconds=timings.get("speak"),
             total_seconds=time.perf_counter() - turn_start + (stt_seconds or 0.0),
         )

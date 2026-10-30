@@ -94,6 +94,28 @@ Trois dispositions peuvent coexister :
 les PNJ. Les scénarios réservés au MJ doivent rester dans d'autres dossiers.
 La découverte ne charge pas récursivement tous les documents de la campagne.
 Chaque PNJ garde son historique, ses notes, ses secrets et son journal propres.
+Le moteur suit aussi un échange courant par PNJ : objet ou service, fournisseur,
+destinataire, payeur, bénéficiaire, récompense proposée, contre-offre, accord et déclarations
+de livraison ou de paiement. Avant chaque réponse au joueur, une analyse JSON
+séparée reçoit jusqu'aux huit derniers messages (bornés en taille), le repère précédent
+et les quatre dernières consignes MJ ; elle ne reçoit ni fiches ni corps de
+secrets bloqués. Le résultat est validé en Python, puis rappelé au modèle près de
+la question actuelle. Le paiement est calculé dans le sens inverse du bien ou du
+service fourni : demander des pièces à la place d'une récompense en objets ne
+transforme pas cette récompense en vente. Une inversion des rôles ou un changement
+de type de marché exige une citation de la demande actuelle ou d'une consigne MJ.
+Les anciennes répliques du PNJ signalées comme contradictoires sont écartées du
+contexte temporaire de génération ; elles restent dans l'historique et la transcription.
+Ce repère interne n'est ni prononcé ni ajouté à l'historique.
+Il subsiste lors d'un changement de PNJ et de `/reload`, et disparaît à la
+réinitialisation de session ou au redémarrage du moteur. Une déclaration du joueur
+reste à confirmer ; une confirmation exige une source MJ citée. Le MJ peut
+corriger les rôles ou les conditions avec une consigne ordinaire.
+Ce suivi ajoute un appel au modèle par tour et peut accroître sensiblement le
+délai avec un modèle local. Pour revenir au fonctionnement précédent, régler
+`exchange_tracking = false` dans `[llm]`, puis `/reload` (ou redémarrer).
+Une analyse indisponible ou invalide conserve le repère précédent. Le JSON et les
+contrôles de structure ne garantissent pas l'interprétation du dialogue.
 Un identifiant de zone tel que `village/garde` s'écrit entre guillemets dans les
 correspondances TOML de voix ou de langue.
 
@@ -272,6 +294,13 @@ affichées pour chaque cas ; cette sonde ne valide pas automatiquement le sens.
 Elle couvre aussi l'achat d'une corde apportée par les joueurs, sa vente par le
 PNJ et une simple intention de chercher du matériel. Ajouter `--temperature 0.2`
 pour comparer ce réglage au comportement du serveur sur les mêmes historiques.
+Ajouter `--exchange-tracking` à `--coherence` pour comparer avec la mise à jour
+automatique du registre et afficher le repère effectivement extrait.
+Ajouter `--sequential` pour mettre à jour le registre à chaque parole enregistrée,
+et `--case reward-to-coins`, `--case reward-availability` ou
+`--case repair-reward-sale` pour cibler les récompenses en objets remplacées par
+des pièces et la récupération après une réplique incohérente. Les cas rejouent
+l'historique fourni ; seule la réponse finale est générée.
 
 La carte du code est dans [ARCHITECTURE.md](ARCHITECTURE.md) et les conventions
 de maintenance dans [AGENTS.md](AGENTS.md). Licence : [AGPL-3.0](LICENSE).

@@ -121,6 +121,38 @@ la sonde manuelle `probe_narration.py --coherence` permet d'en examiner les limi
 Elle comprend les transferts d'objets dans les deux sens et les intentions qui
 ne doivent pas devenir des dons ou livraisons déjà effectués.
 
+`CharacterSlot.exchange` conserve un `ExchangeMemory` indépendant par PNJ.
+`session/exchange.py` définit le schéma JSON, les limites de taille, la validation
+et le rappel bilingue. `_respond_to_player()` appelle `analyze_exchange()` dans
+le worker avant la génération, sans communiquer le système de jeu ou les secrets
+au modèle d'analyse : le dialogue récent, les notes MJ et le repère précédent
+sont sérialisés comme données dans un unique message utilisateur. Ollama reçoit
+un `format` JSON Schema ; le backend compatible reçoit `response_format`.
+La température zéro de l'analyse ne modifie pas celle des dialogues.
+Le schéma extrait le fournisseur et le destinataire du bien/service principal ;
+Python en déduit le payeur et le bénéficiaire dans le sens inverse (ou personne
+pour un échange explicitement gratuit). `terms` décrit la contrepartie proposée,
+`requested_terms` la contre-offre et `compensation_kind` sa forme. Les objets
+promis comme récompense restent distincts du service rendu. Une modification du
+type de marché ou des rôles établis exige `new_deal_evidence`, cité dans la dernière
+parole du joueur ou une source MJ, et ne peut être justifiée par le PNJ seul.
+`inconsistent_npc_turns` référence au maximum trois lignes numérotées du dialogue.
+La validation ne retient que des sources PNJ existantes, puis conserve au plus
+quatre textes de répliques signalées. `reply_messages()` les écarte uniquement
+de la copie envoyée au rédacteur, sans toucher à l'historique, aux notes MJ ni à
+la transcription. Un sujet sans rapport n'active ni ce filtre ni le rappel.
+La sélection des répliques contradictoires reste un jugement du modèle.
+Le résultat n'est appliqué qu'après le contrôle d'annulation de session. Le
+rappel est ajouté sur une copie des messages juste avant la parole du joueur,
+y compris en streaming et lors des reprises, puis abandonné. Un changement de
+sujet peut suspendre ce rappel sans perdre le registre. Les déclarations de
+transfert exigent une citation du dialogue ; seul un texte MJ cité peut les
+confirmer. Une sortie invalide conserve l'état précédent ; une panne d'analyse
+n'empêche pas la tentative de réponse ordinaire. Le temps d'analyse est inclus
+dans les durées LLM et de premier jeton. `llm.exchange_tracking = false` désactive
+l'analyse et l'injection. Le registre n'est pas persisté dans les journaux et
+ne remplace pas les faits de campagne ni les décisions du MJ.
+
 `LlmConfig` expose les réglages facultatifs d'échantillonnage `temperature` et
 `top_p` pour les deux backends, ainsi que `top_k` et `repeat_penalty` pour Ollama.
 Les clients transmettent les valeurs configurées en mode complet et en streaming,

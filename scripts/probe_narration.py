@@ -21,6 +21,7 @@ from importlib import resources
 
 from npc.llm import OllamaClient
 from npc.session.history import ConversationHistory
+from npc.session.exchange import ExchangeMemory
 from npc.session.prompt import build_system_prompt, extract_dialogue
 
 NPC_NAME = "Vess of the Glass Monolith"
@@ -107,6 +108,48 @@ def coherence_scenarios(language: str):
             ("npc", "I have ten metres of rope for sale, if you need some."),
             ("player", "Yes, how much will you sell it to us for?"),
         ]
+    if language == "fr":
+        reward_in_kind = [('npc',
+          'Je suis Gaspard du Sillon, fermier de cette plaine. Mes champs ont besoin de bras, mais '
+          'surtout de sens commun. Et mes épouvantails, ils ont des idées... comme des blés qui '
+          'germent sans semis.'),
+         ('player', 'Comment pouvons-nous vous aider ?'),
+         ('npc',
+          'Je vous écoute, mais pas pour des promesses en l’air. Si vous voulez m’aider, commencez '
+          'par dire vous allez sauver mon blé sans tout faire tomber en miettes. Et les '
+          'épouvantails, ils ont droit à un peu de respect—ils ont travaillé plus dur que certains '
+          'ici.'),
+         ('player',
+          "D'accord, nous ferons attention aux époux en taille. On ramassera votre blé. Qu'est-ce "
+          'que vous nous donneriez en échange ?'),
+         ('npc',
+          'Je vous donnerai une corde solide et une planche pour réparer ce chariot—si vous me '
+          'jurez de ne pas laisser les épouvantails finir en tas de paille à moitié mangée. Et si '
+          'vous les traitez comme des alliés, pas comme des meubles.'),
+         ('player', 'on aurait préféré des pièces'),
+         ('npc',
+          'Des pièces, vous dites? Très bien, mais je ne compte pas les semer dans le vent. Trois '
+          'pièces d’argent pour la corde et deux pour la planche—et si vous voulez mon chapeau de '
+          'respectabilité, il faudra prouver que vous savez tenir une promesse plus solide qu’un '
+          'champ de blé mouillé.'),
+         ('player', 'Mais vous avez la planche et la corde ou pas ?'),
+         ('npc',
+          'Je les ai, mais pas pour les donner comme des miettes. Si vous avez les pièces, je vous '
+          'les tends—mais si vous voulez la corde, il faudra m’expliquer comment vous comptez '
+          'l’utiliser sans tout emmêler comme un champ de blés en hiver. Et la planche, elle a vu '
+          'mieux à faire que finir en planche à clous pour un chariot rouillé.'),
+         ('player', "Pourquoi faudrait-il vous payer alors qu'on vous aide à ramasser votre blé ?")]
+    else:
+        reward_in_kind = [
+            ("npc", "I need help harvesting my wheat, without damaging my scarecrows."),
+            ("player", "We will harvest your wheat. What would you give us in return?"),
+            ("npc", "I would give you a sturdy rope and a board as a reward."),
+            ("player", "We would rather have coins."),
+            ("npc", "Three silver coins for the rope and two for the board."),
+            ("player", "Do you actually have the rope and the board?"),
+            ("npc", "I have them. If you have the coins, I will hand them over."),
+            ("player", "Why should we pay you when we are helping harvest your wheat?"),
+        ]
     negotiation = [("npc", request), ("player", reward)]
     return character, [
         ("reward-request", "NPC offers or discusses paying the players for recovery.", negotiation),
@@ -126,23 +169,42 @@ def coherence_scenarios(language: str):
         ("promise-to-find-rope", "Players only intend to look for rope. Do not invent "
          "a completed delivery, payment or gift of equipment.", rope_exchange[:6]),
         ("npc-sells-rope", "NPC supplies the rope; players would pay the NPC.", rope_sale),
+        ("reward-to-coins", "Players ask to receive coins instead of the NPC's rope/board "
+         "reward for harvesting. NPC must not sell them that reward.", reward_in_kind[:-4]),
+        ("reward-availability", "Answer about the NPC's reward items, not a separate sale; "
+         "preserve the players' harvest service despite the bad NPC reply.", reward_in_kind[:-2]),
+        ("repair-reward-sale", "Correct the NPC's earlier attempt to charge players for "
+         "their own reward. NPC owes the reward for harvesting, not the players.", reward_in_kind),
     ]
 
 
-def probe_coherence(llm: OllamaClient) -> int:
+def probe_coherence(llm: OllamaClient, *, exchange_tracking: bool = False,
+                    sequential: bool = False, cases: list[str] | None = None) -> int:
     for language in ("fr", "en"):
         character, scenarios = coherence_scenarios(language)
         system = build_system_prompt(character, "", "", [], language=language)
         for label, expected, turns in scenarios:
+            if cases and label not in cases:
+                continue
+            memory = ExchangeMemory()
             history = ConversationHistory()
             print(f"--- {language}/{label}\nEXPECT : {expected}")
-            for role, line in turns:
+            for index, (role, line) in enumerate(turns):
                 if role == "npc":
                     history.add_npc(line)
                 else:
                     history.add_player(line)
-                print(f"{role.upper():7}: {line}")
-            raw = llm.chat(system, history.as_messages())
+                print(f"{role.upper():7}: {line}", flush=True)
+                if (exchange_tracking and role == "player"
+                        and (sequential or index == len(turns) - 1)):
+                    payload = memory.payload("Gaspard du Sillon", history.as_messages(), [], language)
+                    memory = memory.updated(llm.analyze_exchange(payload), payload)
+                    print(f"STATE  : {memory.current}", flush=True)
+            messages = history.as_messages()
+            if exchange_tracking:
+                messages = memory.reply_messages(messages, language)
+                print(f"EXCLUDED NPC REPLIES: {len(memory.excluded_npc_lines)}", flush=True)
+            raw = llm.chat(system, messages)
             print(f"RAW    : {raw!r}")
             cleaned = extract_dialogue(raw, "Gaspard du Sillon")
             if cleaned != raw:
@@ -156,14 +218,28 @@ def main() -> int:
     parser.add_argument("model", nargs="?", default="qwen2.5:7b-instruct")
     parser.add_argument("--coherence", action="store_true",
                         help="probe payer/payee roles and proposals versus completed actions")
+    parser.add_argument("--exchange-tracking", action="store_true",
+                        help="analyze and inject the exchange state (requires --coherence)")
+    parser.add_argument("--sequential", action="store_true",
+                        help="update memory at each recorded player turn (requires --exchange-tracking)")
+    parser.add_argument("--case", action="append", choices=[
+        label for label, _, _ in coherence_scenarios("fr")[1]],
+                        help="run only this coherence scenario; repeat for several cases")
     parser.add_argument("--temperature", type=float,
                         help="override Ollama's temperature for this probe (e.g. 0.2)")
     args = parser.parse_args()
+    if args.exchange_tracking and not args.coherence:
+        parser.error("--exchange-tracking requires --coherence")
+    if args.sequential and not args.exchange_tracking:
+        parser.error("--sequential requires --exchange-tracking")
+    if args.case and not args.coherence:
+        parser.error("--case requires --coherence")
     if args.temperature is not None and not 0 <= args.temperature <= 2:
         parser.error("--temperature must be a finite number from 0 to 2")
     llm = OllamaClient("http://localhost:11434", args.model, temperature=args.temperature)
     if args.coherence:
-        return probe_coherence(llm)
+        return probe_coherence(llm, exchange_tracking=args.exchange_tracking,
+                               sequential=args.sequential, cases=args.case)
     templates = resources.files("npc") / "templates"
     system = build_system_prompt(
         (templates / "character.md").read_text(encoding="utf-8"),

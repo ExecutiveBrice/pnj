@@ -106,11 +106,20 @@ class _ChatClient:
         raise self._connection_error(last) from last
 
     def _chat(self, system: str, messages: list[dict[str, str]], *,
-              temperature: float | None = None) -> str:
+              temperature: float | None = None, schema: dict | None = None) -> str:
         raise NotImplementedError
 
     def _chat_stream(self, system: str, messages: list[dict[str, str]]):
         raise NotImplementedError
+
+    def analyze_exchange(self, payload: dict) -> str:
+        """Analyze public conversation separately from role-play, at temperature zero."""
+        import json
+        from .session.exchange import EXCHANGE_ANALYZER, EXCHANGE_SCHEMA
+
+        messages = [{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
+        return self._with_retry(lambda: self._chat(
+            EXCHANGE_ANALYZER, messages, temperature=0.0, schema=EXCHANGE_SCHEMA))
 
     def _sampling_options(self, temperature: float | None = None) -> dict:
         values = {"temperature": self.temperature if temperature is None else temperature,
@@ -238,7 +247,7 @@ class OllamaClient(_ChatClient):
         return options or None
 
     def _chat(self, system: str, messages: list[dict[str, str]], *,
-              temperature: float | None = None) -> str:
+              temperature: float | None = None, schema: dict | None = None) -> str:
         import ollama
 
         try:
@@ -246,6 +255,7 @@ class OllamaClient(_ChatClient):
                 model=self.model,
                 messages=[{"role": "system", "content": system}, *messages],
                 options=self._options(temperature),
+                **({"format": schema} if schema is not None else {}),
             )
         except ollama.ResponseError as e:
             raise self._response_error(e) from e
@@ -318,7 +328,7 @@ class OpenAICompatClient(_ChatClient):
                                   headers=headers, transport=transport)
 
     def _chat(self, system: str, messages: list[dict[str, str]], *,
-              temperature: float | None = None) -> str:
+              temperature: float | None = None, schema: dict | None = None) -> str:
         import httpx
 
         payload = {
@@ -326,6 +336,10 @@ class OpenAICompatClient(_ChatClient):
             "messages": [{"role": "system", "content": system}, *messages],
         }
         payload.update(self._sampling_options(temperature))
+        if schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema", "json_schema": {
+                    "name": "npc_exchange", "strict": True, "schema": schema}}
         response = self._http.post("/chat/completions", json=payload)
         try:
             response.raise_for_status()

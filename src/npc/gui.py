@@ -513,7 +513,7 @@ class DesktopWindow:
         self.root.after(80, self.poll)
 
 
-def main(campaign=".") -> int:
+def main(campaign=None) -> int:
     try:
         import tkinter as tk
     except ImportError:
@@ -523,6 +523,18 @@ def main(campaign=".") -> int:
               "ou installez python3-tk sous Linux.", file=sys.stderr)
         return 1
     root = tk.Tk()
+    if campaign is None:
+        from .cli import default_campaign
+
+        try:
+            campaign = default_campaign()
+        except OSError as exc:
+            from tkinter import messagebox
+
+            root.withdraw()
+            messagebox.showerror("Création de la campagne impossible", str(exc), parent=root)
+            root.destroy()
+            return 1
     DesktopWindow(root, campaign)
     root.mainloop()
     return 0

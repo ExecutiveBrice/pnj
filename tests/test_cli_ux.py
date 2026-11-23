@@ -1,7 +1,12 @@
 """Onboarding UX: the init wizard, quick-start lines, forgiving commands."""
 
+import sys
 import textwrap
+from types import SimpleNamespace
 
+import pytest
+
+from npc import cli, doctor, gui
 from npc.app import NPCApp
 from npc.cli import (
     init_campaign,
@@ -123,6 +128,45 @@ def test_init_campaign_overrides(tmp_path):
     assert "Vess" in (tmp_path / "adventure.md").read_text(encoding="utf-8")
 
 
+@pytest.fixture
+def project_default(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").touch()
+    monkeypatch.setattr(cli, "__file__", str(project / "src/npc/cli.py"))
+    monkeypatch.chdir(tmp_path)
+    return project / "campaigns/default"
+
+
+def test_default_campaign_is_created_at_the_project_root(project_default, monkeypatch):
+    def check_default(config, *, deep):
+        assert deep
+        assert config.campaign_dir == project_default
+        assert config.character_file.read_text(encoding="utf-8").startswith("# Vess")
+        assert config.logbook_file.is_file()
+        assert config.sessions_dir.is_dir()
+        return []
+
+    monkeypatch.setattr(doctor, "run_checks", check_default)
+    assert cli.main(["doctor"]) == 0
+
+
+def test_campaign_with_zones_is_reused(project_default, monkeypatch, tmp_path):
+    characters = project_default / "zones/village/characters"
+    characters.mkdir(parents=True)
+    (characters / "garde.md").write_text("# Garde\n", encoding="utf-8")
+    selected = []
+    root = SimpleNamespace(mainloop=lambda: None)
+    monkeypatch.setitem(sys.modules, "tkinter", SimpleNamespace(Tk=lambda: root))
+    monkeypatch.setattr(gui, "DesktopWindow", lambda root, campaign: selected.append(campaign))
+
+    assert gui.main() == 0  # npc-gui
+    assert cli.main(["gui"]) == 0
+    assert cli.main(["gui", str(tmp_path)]) == 0
+    assert selected == [project_default, project_default, str(tmp_path)]
+    assert not (project_default / "character.md").exists()
+
+
 def test_quickstart_lore_line_only_when_present(campaign):
     config = load_config(campaign)
     app = app_for(campaign)
@@ -160,12 +204,9 @@ def test_overlay_announcement_lines():
 
 
 def test_version_flag(capsys):
-    import pytest
-
     from npc import __version__
-    from npc.cli import main
 
     with pytest.raises(SystemExit) as exc:
-        main(["--version"])
+        cli.main(["--version"])
     assert exc.value.code == 0
     assert capsys.readouterr().out.strip() == f"npc {__version__}"

@@ -12,9 +12,8 @@ Python 3.11 ou supérieur et `uv` sont nécessaires. Depuis ce dépôt :
 
 ```sh
 uv sync --frozen --group dev
-uv run npc init campaigns/demo
-uv run npc doctor --fix campaigns/demo
-uv run npc gui campaigns/demo
+uv run npc doctor --fix
+uv run npc gui
 ```
 
 `doctor` vérifie les services locaux, les modèles, l'audio et la campagne.
@@ -37,7 +36,7 @@ uv sync --frozen --group dev --extra qwen
 Les options des dépendances vocales dépendent de la version de Python et de la
 plateforme ; leurs contraintes sont définies dans `pyproject.toml`.
 
-En console : `uv run npc run campaigns/demo`. Le push-to-talk global utilise
+En console, lancer `uv run npc run`. Le push-to-talk global utilise
 evdev sous Linux ; le bouton d'enregistrement de l'interface de bureau est
 l'entrée micro sur Windows et macOS. `/say Bonjour` permet de dialoguer au clavier.
 Une ligne sans commande donne une consigne au MJ. `/npc` liste les personnages,
@@ -64,7 +63,14 @@ cours doit être terminé avant de déclencher cette prise de parole.
 
 Les campagnes sont des dossiers indépendants de fichiers Markdown et TOML.
 `campaigns/` est ignoré par Git pour conserver les parties hors du code source.
-Ouvrir une campagne existante avec `uv run npc gui /chemin/vers/campagne`.
+Sans chemin, `npc gui`, `npc run` et `npc doctor` utilisent `campaigns/default/`
+à la racine du projet. Au premier lancement, le moteur crée ce dossier avec
+les fichiers de la campagne d'exemple. Pour partir d'une fiche personnalisée,
+lancer `npc init` avant d'ouvrir la campagne. Avec une installation autonome,
+le dossier `campaigns/default/` se trouve sous le répertoire de lancement.
+
+Pour ouvrir une autre campagne, lancer `uv run npc gui /chemin/vers/campagne`.
+Utiliser `.` pour choisir le dossier courant.
 
 Trois dispositions peuvent coexister :
 
@@ -92,7 +98,7 @@ qui possède déjà `zones/*/characters/*.md` s'ouvre directement.
 
 ## Mobile et création de voix
 
-`uv run npc run campaigns/demo --mobile` active le compagnon à
+`uv run npc run --mobile` active le compagnon à
 `http://127.0.0.1:8766/` ; son API WebSocket utilise `/ws`.
 Le studio enregistre les profils et aperçus vocaux dans `voix/` de la campagne.
 Les récits sont déposés dans `histoires/`, avec leur texte Markdown, leur WAV et

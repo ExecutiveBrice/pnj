@@ -56,6 +56,11 @@ séparé par JSON sur stdin/stdout, sans charger les modèles dans Tk.
 
 ## Campagnes et isolation
 
+Les points d'entrée sans chemin utilisent `campaigns/default/` à la racine du
+projet ou sous le dossier de lancement pour une installation autonome. La
+console et le bureau partagent l'initialisation depuis les templates du paquet
+et réutilisent la campagne dès qu'elle contient une fiche.
+
 `discover_character_files()` est le point commun de découverte pour le moteur,
 les interfaces et les diagnostics. Il accepte `character.md`, `characters/*.md`
 et `zones/*/characters/*.md`. La zone `commun` est prioritaire ; les identifiants

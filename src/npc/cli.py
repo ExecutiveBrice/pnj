@@ -6,12 +6,15 @@ import argparse
 import sys
 from importlib import resources
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from . import __version__
 from .config import ConfigError, load_config
 
-TEMPLATE_FILES = ("character.md", "adventure.md", "logbook.md", "config.toml",
-                  "secrets.md")
+DEFAULT_CAMPAIGN = Path("campaigns/default")
+# Publish the character last so a failed initialization can be retried.
+TEMPLATE_FILES = ("adventure.md", "logbook.md", "config.toml", "secrets.md",
+                  "character.md")
 
 
 def init_campaign(campaign_dir: Path,
@@ -25,12 +28,38 @@ def init_campaign(campaign_dir: Path,
     templates = resources.files("npc") / "templates"
     for name in TEMPLATE_FILES:
         target = campaign_dir / name
-        if not target.exists():
-            text = (overrides or {}).get(name) or \
-                (templates / name).read_text(encoding="utf-8")
-            target.write_text(text, encoding="utf-8")
-            created.append(target)
+        if target.exists():
+            continue
+        text = (overrides or {}).get(name) or (templates / name).read_text(encoding="utf-8")
+        draft = NamedTemporaryFile(dir=campaign_dir, prefix=f".{name}.", suffix=".tmp",
+                                   delete=False, mode="w", encoding="utf-8")
+        temporary = Path(draft.name)
+        try:
+            with draft:
+                draft.write(text)
+            target.hardlink_to(temporary)
+        except FileExistsError:
+            continue
+        finally:
+            temporary.unlink(missing_ok=True)
+        created.append(target)
     return created
+
+
+def default_campaign_dir() -> Path:
+    source = Path(__file__).resolve().parents[1]
+    if source.name == "src" and (source.parent / "pyproject.toml").is_file():
+        return source.parent / DEFAULT_CAMPAIGN
+    return Path.cwd() / DEFAULT_CAMPAIGN
+
+
+def default_campaign() -> Path:
+    from .roster import discover_character_files
+
+    campaign_dir = default_campaign_dir()
+    if not discover_character_files(campaign_dir):
+        init_campaign(campaign_dir)
+    return campaign_dir
 
 
 def skeleton_character(name: str, concept: str) -> str:
@@ -147,7 +176,7 @@ Next:
 
 
 def cmd_init(args) -> int:
-    campaign_dir = Path(args.campaign)
+    campaign_dir = default_campaign_dir() if args.campaign is None else Path(args.campaign)
     if sys.stdin.isatty():
         run_init_wizard(campaign_dir)
     else:  # scripted/piped: keep init non-interactive and example-based
@@ -610,30 +639,24 @@ def main(argv=None) -> int:
     parser.add_argument("--version", action="version", version=f"npc {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def add(name, func, help_text, campaign_optional=False):
+    def add(name, func, help_text):
         p = sub.add_parser(name, help=help_text)
-        if campaign_optional:  # `npc run` inside a campaign dir just works
-            p.add_argument("campaign", nargs="?", default=".",
-                           help="campaign directory (default: current directory)")
-        else:
-            p.add_argument("campaign", help="campaign directory")
+        p.add_argument("campaign", nargs="?",
+                       help=f"campaign directory (default: {DEFAULT_CAMPAIGN.as_posix()})")
         p.set_defaults(func=func)
         return p
 
     add("init", cmd_init,
         "create a campaign directory (guided — answers a couple of questions)")
-    add("gui", cmd_gui, "open the desktop interface (Windows, macOS, Linux)",
-        campaign_optional=True)
-    p = add("run", cmd_run, "run the NPC for a play session",
-            campaign_optional=True)
+    add("gui", cmd_gui, "open the desktop interface (Windows, macOS, Linux)")
+    p = add("run", cmd_run, "run the NPC for a play session")
     p.add_argument("--timings", action="store_true",
                    help="print per-stage turn timings after each reply")
     p.add_argument("--overlay", action="store_true",
                    help="serve the OBS/table overlay (forces [overlay] enabled)")
     p.add_argument("--mobile", action="store_true",
                    help="serve the player WebSocket API (forces [mobile] enabled)")
-    p = add("doctor", cmd_doctor, "check (and set up) everything the NPC needs",
-            campaign_optional=True)
+    p = add("doctor", cmd_doctor, "check (and set up) everything the NPC needs")
     p.add_argument("--fix", action="store_true",
                    help="offer to run the safe fixes (model pull, voice download)")
     p = add("transcribe", cmd_transcribe, "debug: transcribe a wav file")
@@ -656,9 +679,14 @@ def main(argv=None) -> int:
 
     args = parser.parse_args(argv)
     try:
+        if args.command in ("run", "doctor", "say", "transcribe") and args.campaign is None:
+            args.campaign = default_campaign()
         return args.func(args)
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
+        return 1
+    except OSError as e:
+        print(f"{args.command}: {e}", file=sys.stderr)
         return 1
 
 

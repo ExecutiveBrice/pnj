@@ -1,0 +1,33 @@
+# Campagne française ; réglages modifiables depuis l'interface.
+language = "fr"
+history_limit = 30
+checkpoint_every_turns = 20
+
+[llm]
+backend = "ollama"
+model = "qwen2.5:7b-instruct"
+host = "http://localhost:11434"
+stream = true
+num_ctx = 8192
+
+[stt]
+model = "small"
+language = "fr"
+device = "auto"
+
+[tts]
+backend = "pocket"
+model = "french"
+voice = "estelle"
+
+[tts.voices]
+"paille-au-nez" = "marius"
+"gaspard" = "javert"
+"corbin" = "jean"
+"melisse" = "anna"
+
+[mobile]
+enabled = false
+local_playback = false
+listen = "0.0.0.0"
+port = 8766

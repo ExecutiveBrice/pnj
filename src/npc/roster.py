@@ -123,7 +123,7 @@ class CharacterSlot:
     character: str  # sheet text, rebuilt into the system prompt every turn
     logbook: Logbook
     history: ConversationHistory
-    voice: str | None = None  # piper voice name; None = campaign default
+    voice: str | None = None  # piper voice name; None = campaign default_campaign
     ooc_notes: list[str] = field(default_factory=list)
     turns: list[tuple[str, str]] = field(default_factory=list)
     player_turns: int = 0

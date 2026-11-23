@@ -43,7 +43,7 @@
 # korval = "en_GB-northern_english_male-medium"   # characters/korval.md
 # korval = "marius"                 # example when backend = "pocket"
 # character = "en_GB-alba-medium"                 # the campaign-root character.md
-#                                   # unmapped characters use the default voice above
+#                                   # unmapped characters use the default_campaign voice above
 
 [overlay]
 # enabled = false                   # broadcast events + serve the overlay page while running

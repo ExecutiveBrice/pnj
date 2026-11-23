@@ -240,7 +240,7 @@ class NPCApp:
             applied.append(f"LLM model → {new.llm.model}")
         if new.llm.num_ctx != getattr(self.llm, "num_ctx", None):  # per-request → live
             self.llm.num_ctx = new.llm.num_ctx
-            applied.append(f"context window → {new.llm.num_ctx or 'server default'}")
+            applied.append(f"context window → {new.llm.num_ctx or 'server default_campaign'}")
         restart_needed = tuple(
             name for name, changed in (
                 ("llm.backend", new.llm.backend != self.config.llm.backend),
@@ -1207,7 +1207,7 @@ class NPCApp:
 
     def _speaker_for(self, slot: CharacterSlot):
         """The speaker for a slot's voice, created lazily and cached by voice
-        name; unavailable voices fall back to the campaign default."""
+        name; unavailable voices fall back to the campaign default_campaign."""
         voice = slot.voice or self.config.tts.voice
         if voice in self._speakers:
             return self._speakers[voice]
@@ -1217,7 +1217,7 @@ class NPCApp:
             speaker = self._make_speaker(self.config.tts.voice_resource_for(voice))
         except Exception as e:
             self._emit(ErrorOccurred(
-                f"voice {voice!r} unavailable ({e}) — using the default voice"))
+                f"voice {voice!r} unavailable ({e}) — using the default_campaign voice"))
             return self._default_speaker
         self._speakers[voice] = speaker
         return speaker

@@ -1,4 +1,4 @@
-"""LLM backends: native Ollama (default) or any OpenAI-compatible server
+"""LLM backends: native Ollama (default_campaign) or any OpenAI-compatible server
 (Jan, LM Studio, llama.cpp server, vLLM, …), selected via [llm].backend."""
 
 from __future__ import annotations
@@ -210,7 +210,7 @@ class OllamaClient(_ChatClient):
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.retries = retries
-        self.num_ctx = num_ctx  # context window; None = the server's default
+        self.num_ctx = num_ctx  # context window; None = the server's default_campaign
         # extra kwargs are forwarded to the underlying httpx.Client
         self._client = ollama.Client(host=host, timeout=timeout_seconds,
                                      transport=transport)

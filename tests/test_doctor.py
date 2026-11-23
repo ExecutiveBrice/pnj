@@ -155,7 +155,7 @@ def test_missing_mapped_voice_gets_a_fixer(tmp_path):
 
 
 def test_mapped_default_voice_is_not_rechecked(tmp_path):
-    config = multi_config(tmp_path, {"korval": "en_GB-alba-medium"})  # = default
+    config = multi_config(tmp_path, {"korval": "en_GB-alba-medium"})  # = default_campaign
     assert [c for c in npc_voice_checks(config) if c.name.startswith("NPC voice (")] == []
 
 

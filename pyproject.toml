@@ -85,7 +85,10 @@ build-backend = "hatchling.build"
 packages = ["src/npc"]
 
 [tool.hatch.build.targets.sdist]
-exclude = [".github/", ".idea/", "campaigns/", "*.onnx", "*.onnx.json", "voix/", "histoires/"]
+exclude = [
+    ".github/", ".idea/", "campaigns/", "/src/default_campaign/",
+    "*.onnx", "*.onnx.json", "voix/", "histoires/",
+]
 
 [tool.pytest.ini_options]
 markers = [

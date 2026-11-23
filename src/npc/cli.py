@@ -11,7 +11,7 @@ from tempfile import NamedTemporaryFile
 from . import __version__
 from .config import ConfigError, load_config
 
-DEFAULT_CAMPAIGN = Path("campaigns/default")
+DEFAULT_CAMPAIGN = Path("src/default_campaign")
 # Publish the character last so a failed initialization can be retried.
 TEMPLATE_FILES = ("adventure.md", "logbook.md", "config.toml", "secrets.md",
                   "character.md")
@@ -50,7 +50,7 @@ def default_campaign_dir() -> Path:
     source = Path(__file__).resolve().parents[1]
     if source.name == "src" and (source.parent / "pyproject.toml").is_file():
         return source.parent / DEFAULT_CAMPAIGN
-    return Path.cwd() / DEFAULT_CAMPAIGN
+    return Path.cwd() / "campaigns/default"
 
 
 def default_campaign() -> Path:
@@ -176,7 +176,15 @@ Next:
 
 
 def cmd_init(args) -> int:
-    campaign_dir = default_campaign_dir() if args.campaign is None else Path(args.campaign)
+    if args.campaign is None:
+        from .roster import discover_character_files
+
+        campaign_dir = default_campaign_dir()
+        if discover_character_files(campaign_dir):
+            print(f"Campaign already exists in {campaign_dir}")
+            return 0
+    else:
+        campaign_dir = Path(args.campaign)
     if sys.stdin.isatty():
         run_init_wizard(campaign_dir)
     else:  # scripted/piped: keep init non-interactive and example-based
@@ -642,7 +650,7 @@ def main(argv=None) -> int:
     def add(name, func, help_text):
         p = sub.add_parser(name, help=help_text)
         p.add_argument("campaign", nargs="?",
-                       help=f"campaign directory (default: {DEFAULT_CAMPAIGN.as_posix()})")
+                       help=f"campaign directory (default in the project: {DEFAULT_CAMPAIGN})")
         p.set_defaults(func=func)
         return p
 

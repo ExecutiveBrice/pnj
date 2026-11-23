@@ -121,7 +121,7 @@ def test_client_only_audio_routes_default_and_switched_voices(campaign, monkeypa
     assert published == ([(20, 22050), (5, 22050), (5, 22050)] if mode == "enabled" else [])
 
 
-@pytest.mark.parametrize("mode", ["default", "flag", "config", "failure", "repl_failure"])
+@pytest.mark.parametrize("mode", ["default_campaign", "flag", "config", "failure", "repl_failure"])
 def test_run_mobile_is_optional_and_stops_on_exit(campaign, monkeypatch, mode, capsys):
     monkeypatch.setattr(doctor, "run_checks", lambda *a, **k: [
         CheckResult("Whisper model", False), CheckResult("Piper voice", False)])
@@ -158,17 +158,17 @@ def test_run_mobile_is_optional_and_stops_on_exit(campaign, monkeypatch, mode, c
         return "quit"
 
     monkeypatch.setattr(cli, "_run_repl", repl)
-    args = ["run", str(campaign)] + ([] if mode in ("default", "config") else ["--mobile"])
+    args = ["run", str(campaign)] + ([] if mode in ("default_campaign", "config") else ["--mobile"])
     if mode == "repl_failure":
         with pytest.raises(RuntimeError, match="REPL failed"):
             cli.main(args)
     else:
         assert cli.main(args) == 0
-    assert len(started) == (0 if mode == "default" else 1)
+    assert len(started) == (0 if mode == "default_campaign" else 1)
     for server in started:
         assert server._thread is None or not server._thread.is_alive()
     output = capsys.readouterr().out
-    if mode == "default":
+    if mode == "default_campaign":
         assert "Mobile server:" not in output
     if mode == "failure":
         assert "mobile server disabled: port busy" in output

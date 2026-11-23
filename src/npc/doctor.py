@@ -198,7 +198,7 @@ def tts_checks(config: Config, deep: bool = False) -> list[CheckResult]:
 
                 runtime = get_runtime(config.tts.model)
                 runtime.prepare(config.tts.voice)
-                checks[0].detail = f"CPU / {config.tts.model}; model and default voice loaded"
+                checks[0].detail = f"CPU / {config.tts.model}; model and default_campaign voice loaded"
                 for voice in sorted(set(config.tts.voices.values()) - {config.tts.voice}):
                     try:
                         runtime.prepare(voice)
@@ -231,7 +231,7 @@ def npc_voice_checks(config: Config) -> list[CheckResult]:
     mapped voice must exist on disk (downloadable via --fix). Named "NPC
     voice …" on purpose — cmd_run's soft-fail matching for "Piper voice"
     must not catch these, because a missing per-NPC voice only means a
-    fallback to the default voice, never disabled speech."""
+    fallback to the default_campaign voice, never disabled speech."""
     from .roster import discover_character_files
 
     checks: list[CheckResult] = []

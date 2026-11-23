@@ -73,7 +73,7 @@ class SpeakerFactory:
         from .engines.pocket import get_runtime
 
         report("Chargement de Pocket TTS sur CPU…")
-        self.default()  # an unavailable default must be reported as a TTS failure
+        self.default()  # an unavailable default_campaign must be reported as a TTS failure
         for voice in sorted(set(self.config.voices.values()) - {self.config.voice}):
             try:
                 report(f"Préparation de la voix {voice}…")

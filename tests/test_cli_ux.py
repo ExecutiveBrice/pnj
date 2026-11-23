@@ -135,10 +135,10 @@ def project_default(tmp_path, monkeypatch):
     (project / "pyproject.toml").touch()
     monkeypatch.setattr(cli, "__file__", str(project / "src/npc/cli.py"))
     monkeypatch.chdir(tmp_path)
-    return project / "campaigns/default"
+    return project / "src/default_campaign"
 
 
-def test_default_campaign_is_created_at_the_project_root(project_default, monkeypatch):
+def test_default_campaign_is_created_in_the_project_sources(project_default, monkeypatch):
     def check_default(config, *, deep):
         assert deep
         assert config.campaign_dir == project_default
@@ -163,6 +163,7 @@ def test_campaign_with_zones_is_reused(project_default, monkeypatch, tmp_path):
     assert gui.main() == 0  # npc-gui
     assert cli.main(["gui"]) == 0
     assert cli.main(["gui", str(tmp_path)]) == 0
+    assert cli.main(["init"]) == 0
     assert selected == [project_default, project_default, str(tmp_path)]
     assert not (project_default / "character.md").exists()
 

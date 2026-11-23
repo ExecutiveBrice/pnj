@@ -47,7 +47,7 @@ def test_tts_voices_mapping_parsed(tmp_path):
     config = load_config(tmp_path)
     assert config.tts.voices == {"korval": "en_GB-northern_english_male-medium"}
     assert config.tts.voice_path_for("x").name == "x.onnx"
-    assert config.tts.voice == "en_GB-alba-medium"    # default untouched
+    assert config.tts.voice == "en_GB-alba-medium"    # default_campaign untouched
 
 
 def test_tts_voices_rejects_non_string_values(tmp_path):

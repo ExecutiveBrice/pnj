@@ -83,7 +83,7 @@ class GmNoteAdded(Event):
 class NpcSwitched(Event):
     """The GM switched the active NPC with /npc."""
     npc_name: str
-    voice: str | None = None  # piper voice name; None = campaign default
+    voice: str | None = None  # piper voice name; None = campaign default_campaign
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +111,7 @@ class TurnCompleted(Event):
     """Per-stage timings for one player turn, measured from the clip landing
     in the worker (or the /say line) until the reply finished. On the
     streaming path the LLM and TTS stages overlap, so stages don't sum to
-    total. Hidden in the CLI by default — `npc run --timings` prints them."""
+    total. Hidden in the CLI by default_campaign — `npc run --timings` prints them."""
     stt_seconds: float | None            # None for typed /say turns
     llm_first_token_seconds: float | None  # None on the non-streaming path
     llm_seconds: float

@@ -326,7 +326,7 @@ def save_tts(campaign_dir: Path, *, backend: str | None = None,
                 raise ConfigError(f"Unknown Pocket voice: {voice}")
         if stem is None:
             if not voice.strip() or voice == "inherit":
-                raise ConfigError("Choose a default voice.")
+                raise ConfigError("Choose a default_campaign voice.")
             source = _set_table_value(source, "tts", "voice", voice.strip())
         else:
             # Use only explicit entries, not Piper defaults inferred from languages.

@@ -62,12 +62,12 @@ cours doit être terminé avant de déclencher cette prise de parole.
 ## Campagnes
 
 Les campagnes sont des dossiers indépendants de fichiers Markdown et TOML.
-`campaigns/` est ignoré par Git pour conserver les parties hors du code source.
-Sans chemin, `npc gui`, `npc run` et `npc doctor` utilisent `campaigns/default/`
-à la racine du projet. Au premier lancement, le moteur crée ce dossier avec
-les fichiers de la campagne d'exemple. Pour partir d'une fiche personnalisée,
-lancer `npc init` avant d'ouvrir la campagne. Avec une installation autonome,
-le dossier `campaigns/default/` se trouve sous le répertoire de lancement.
+Dans ce projet, `npc gui`, `npc run` et `npc doctor` utilisent `src/default_campaign/`
+quand aucun chemin n'est fourni. Le moteur y réutilise la campagne existante
+ou l'initialise à partir de l'exemple fourni. Pour partir d'une fiche personnalisée,
+lancer `npc init` avant la première ouverture. Avec une installation autonome,
+le dossier par défaut est `campaigns/default/` sous le répertoire de lancement.
+Git ignore `src/default_campaign/` et `campaigns/`.
 
 Pour ouvrir une autre campagne, lancer `uv run npc gui /chemin/vers/campagne`.
 Utiliser `.` pour choisir le dossier courant.

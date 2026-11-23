@@ -69,7 +69,7 @@ def test_bare_npc_lists_roster(multi_app):
     listing = of_type(multi_app, Info)[-1].message
     assert "Korval the Red (korval) — voice en_GB-test-voice" in listing
     assert "[active]" in listing
-    assert "Mira (mira) — voice en_GB-alba-medium" in listing  # default voice
+    assert "Mira (mira) — voice en_GB-alba-medium" in listing  # default_campaign voice
 
 
 def test_unknown_and_ambiguous_names_list_the_roster(multi_app):
@@ -165,7 +165,7 @@ def test_voice_mapping_drives_the_speaker_factory(multi_app):
     assert multi_app.factory.calls[0].name == "en_GB-test-voice.onnx"
     assert multi_app.speaker is not default_speaker   # barge-in hits the new one
 
-    switch(multi_app, "mira")                          # default voice → no factory
+    switch(multi_app, "mira")                          # default_campaign voice → no factory
     assert len(multi_app.factory.calls) == 1
     assert multi_app.speaker is default_speaker
 

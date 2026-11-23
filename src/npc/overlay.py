@@ -1,7 +1,7 @@
 """Local WebSocket event broadcast plus the bundled overlay page.
 
 `npc run --overlay` (or `[overlay] enabled = true`) starts OverlayServer.
-It binds 127.0.0.1 by default; `[overlay] listen` widens it to a LAN address
+It binds 127.0.0.1 by default_campaign; `[overlay] listen` widens it to a LAN address
 as an explicit opt-in — the stream is unauthenticated and plaintext, so
 cli.py then publishes only `table_safe` events (GM notes, status, and every
 dm_only secret event stay on this machine). An OBS browser source (or any
@@ -29,7 +29,7 @@ from .events import Event
 
 def event_to_json(event: Event) -> str:
     """{"type": "NpcReplied", ...fields}. State is a StrEnum (str subclass),
-    so json.dumps renders it as its value; default=str is the safety net.
+    so json.dumps renders it as its value; default_campaign=str is the safety net.
     ensure_ascii=False keeps Swedish/emoji text readable UTF-8 on the wire
     (websocket text frames are UTF-8 by spec)."""
     return json.dumps({"type": type(event).__name__, **asdict(event)},

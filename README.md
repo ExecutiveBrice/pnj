@@ -67,7 +67,8 @@ quand aucun chemin n'est fourni. Le moteur y réutilise la campagne existante
 ou l'initialise à partir de l'exemple fourni. Pour partir d'une fiche personnalisée,
 lancer `npc init` avant la première ouverture. Avec une installation autonome,
 le dossier par défaut est `campaigns/default/` sous le répertoire de lancement.
-Git ignore `src/default_campaign/` et `campaigns/`.
+Les fichiers de départ de `src/default_campaign/` sont versionnés. Git ignore
+ses transcriptions dans `sessions/` ainsi que les campagnes dans `campaigns/`.
 
 Pour ouvrir une autre campagne, lancer `uv run npc gui /chemin/vers/campagne`.
 Utiliser `.` pour choisir le dossier courant.

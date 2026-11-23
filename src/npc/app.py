@@ -117,7 +117,7 @@ COMMANDS = ("/say", "/npc", "/yes", "/no", "/later", "/secrets", "/reveal",
 
 class NPCApp:
     def __init__(self, config: Config, *, llm, transcriber=None, recorder=None,
-                 speaker=None, make_speaker=None,
+                 speaker=None, make_speaker=None, speaker=None,
                  on_event: Callable[[Event], None] | None = None):
         self.config = config
         self.llm = llm

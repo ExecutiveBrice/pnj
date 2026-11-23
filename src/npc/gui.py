@@ -497,7 +497,7 @@ class DesktopWindow:
             elif kind == "stopping":
                 self.mark_stopping()
             elif kind == "exit":
-                self.engine.acknowledge_exit()
+            self.engine.acknowledge_exit()
                 self.ready = self.microphone = self.recording = self.stopping = False
                 self.set_speech_npcs({})
                 self.status.set("Écoute terminée" if self.testing_voice and message["code"] == 0

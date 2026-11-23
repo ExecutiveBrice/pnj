@@ -645,7 +645,7 @@ def main(argv=None) -> int:
         description="Offline AI NPC voice agent for tabletop RPGs.",
     )
     parser.add_argument("--version", action="version", version=f"npc {__version__}")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True]
 
     def add(name, func, help_text):
         p = sub.add_parser(name, help=help_text)
